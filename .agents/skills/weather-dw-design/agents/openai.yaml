@@ -1,0 +1,4 @@
+interface:
+  display_name: "Weather DW Design"
+  short_description: "Weather Star Schema, keys, and OLAP aggregation"
+  default_prompt: "Use $weather-dw-design to design or review a weather warehouse at source × location × hour grain."

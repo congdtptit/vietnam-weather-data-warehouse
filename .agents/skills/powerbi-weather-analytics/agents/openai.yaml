@@ -1,0 +1,4 @@
+interface:
+  display_name: "Power BI Weather Analytics"
+  short_description: "Weather Power BI, DAX, and forecast dashboards"
+  default_prompt: "Use $powerbi-weather-analytics to build or review relationships, DAX, and weather dashboards against the actual schema."

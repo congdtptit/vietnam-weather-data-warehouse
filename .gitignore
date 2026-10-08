@@ -1,0 +1,93 @@
+# ==============================================================================
+# Git Ignore Configuration - Weather Data Lake & Data Warehouse Project
+# ==============================================================================
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment variables & secrets (Keep .env.example tracked)
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Docker & Container mounts / volumes
+.minio.sys/
+minio_data/
+postgres_data/
+
+# Apache Airflow runtime files
+logs/
+airflow.cfg
+airflow.db
+airflow-worker.pid
+webserver_config.py
+unittests.cfg
+.airflow_db_initialized
+
+# Data Lake raw data files & local dumps (do not commit heavy data)
+data/bronze/*
+data/silver/*
+data/gold/*
+!data/bronze/.gitkeep
+!data/silver/.gitkeep
+!data/gold/.gitkeep
+*.parquet
+*.nc
+*.nc4
+*.h5
+*.hdf5
+*.tar.gz
+*.zip
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# IDE and Editor configurations
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating System files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

@@ -1,0 +1,180 @@
+x-airflow-common: &airflow-common
+  image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:2.9.3}
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-airflow}
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqJZPo=}
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY:-weather_airflow_secret_key_session_2026_dwh}
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'false'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__CORE__ENABLE_XCOM_PICKLING: 'true'
+    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+    _PIP_ADDITIONAL_REQUIREMENTS: "minio boto3 pandas pyarrow fastparquet psycopg2-binary requests scikit-learn"
+    # Environment variables for DAGs and ETL scripts
+    MINIO_ENDPOINT: minio:9000
+    MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+    MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    MINIO_SECURE: 'false'
+    MINIO_BUCKET_BRONZE: ${MINIO_BUCKET_BRONZE:-bronze}
+    MINIO_BUCKET_SILVER: ${MINIO_BUCKET_SILVER:-silver}
+    MINIO_BUCKET_GOLD: ${MINIO_BUCKET_GOLD:-gold}
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: 5432
+    POSTGRES_USER: ${POSTGRES_USER:-postgres}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    DWH_DB: ${DWH_DB:-weather_dwh}
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+    - ./config:/opt/airflow/config
+    - ./scripts:/opt/airflow/scripts
+    - ./docs:/opt/airflow/docs
+    - ./data:/opt/airflow/data
+  user: "${AIRFLOW_UID:-50000}:0"
+
+services:
+  # ============================================================================
+  # 1. PostgreSQL Service: Airflow Metadata DB & Weather Data Warehouse
+  # ============================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: weather-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-airflow}
+      DWH_DB: ${DWH_DB:-weather_dwh}
+    ports:
+      - "${POSTGRES_PORT:-5434}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/01_init_postgres.sh:/docker-entrypoint-initdb.d/01_init_postgres.sh
+      - ./sql/init_dwh_schema.sql:/docker-entrypoint-initdb.d/schema/init_dwh_schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-airflow}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - weather-network
+
+  # ============================================================================
+  # 2. MinIO Service: S3-Compatible Data Lake (Bronze / Silver / Gold)
+  # ============================================================================
+  minio:
+    image: cgr.dev/chainguard/minio:latest
+    container_name: weather-minio
+    restart: always
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - weather-network
+
+  # ============================================================================
+  # 3. MinIO Init Service: Tự động khởi tạo 3 bucket bronze, silver, gold
+  # ============================================================================
+  minio-init:
+    image: cgr.dev/chainguard/minio-client:latest-dev
+    container_name: weather-minio-init
+    depends_on:
+      - minio
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "
+      echo 'Waiting for MinIO service to become ready...';
+      until mc alias set myminio http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin} 2>/dev/null; do
+        sleep 2;
+      done;
+      echo '=== [MinIO Init] Creating buckets: bronze, silver, gold ===';
+      mc mb --ignore-existing myminio/${MINIO_BUCKET_BRONZE:-bronze};
+      mc mb --ignore-existing myminio/${MINIO_BUCKET_SILVER:-silver};
+      mc mb --ignore-existing myminio/${MINIO_BUCKET_GOLD:-gold};
+      echo '=== [MinIO Init] Current buckets in MinIO ===';
+      mc ls myminio;
+      echo '=== [MinIO Init] Finished successfully! ===';
+      exit 0;
+      "
+    networks:
+      - weather-network
+
+  # ============================================================================
+  # 4. Airflow Init Service: Khởi tạo database và tạo tài khoản Admin
+  # ============================================================================
+  airflow-init:
+    <<: *airflow-common
+    container_name: weather-airflow-init
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: >
+      /bin/bash -c "
+      echo '=== [Airflow Init] Running database migrations... ===' &&
+      airflow db migrate &&
+      echo '=== [Airflow Init] Creating admin user... ===' &&
+      airflow users create --username ${_AIRFLOW_WWW_USER_USERNAME:-admin} --firstname Weather --lastname Admin --role Admin --email admin@weather.local --password ${_AIRFLOW_WWW_USER_PASSWORD:-admin} || true &&
+      echo '=== [Airflow Init] Completed! ==='
+      "
+    networks:
+      - weather-network
+
+  # ============================================================================
+  # 5. Airflow Webserver: UI điều phối luồng ETL
+  # ============================================================================
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: weather-airflow-webserver
+    restart: always
+    command: webserver
+    ports:
+      - "${AIRFLOW_WEBSERVER_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    networks:
+      - weather-network
+
+  # ============================================================================
+  # 6. Airflow Scheduler: Lập lịch và trigger các DAGs
+  # ============================================================================
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: weather-airflow-scheduler
+    restart: always
+    command: scheduler
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      airflow-init:
+        condition: service_completed_successfully
+    networks:
+      - weather-network
+
+volumes:
+  postgres_data:
+    driver: local
+  minio_data:
+    driver: local
+
+networks:
+  weather-network:
+    driver: bridge

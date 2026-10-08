@@ -1,0 +1,4 @@
+interface:
+  display_name: "Weather Data Quality"
+  short_description: "Missing hours, duplicates, and source reconciliation"
+  default_prompt: "Use $weather-data-quality to check the requested weather data scope and report coverage and detected issues."

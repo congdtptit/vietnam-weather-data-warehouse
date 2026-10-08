@@ -1,0 +1,4 @@
+interface:
+  display_name: "Weather ETL & Airflow"
+  short_description: "UTC weather ETL, backfills, and idempotent loading"
+  default_prompt: "Use $weather-etl-airflow to build or review the requested weather pipeline and verify duplicate-free reruns."

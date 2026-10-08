@@ -1,0 +1,4 @@
+interface:
+  display_name: "CART Rain Forecast"
+  short_description: "24h rain CART, leakage prevention, and Recall"
+  default_prompt: "Use $cart-rain-forecast to build or review RainNext24h models, select thresholds on validation, and evaluate an independent test set."
