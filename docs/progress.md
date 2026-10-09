@@ -9,12 +9,15 @@ Workbook `Phan_cong_cong_viec_DW_khi_tuong.xlsx` là nơi quản lý phân công
 | Hạng mục | Bằng chứng | Trạng thái xác minh |
 | --- | --- | --- |
 | Hạ tầng | `docker-compose.yml`, `.env.example`, `Dockerfile` | Có cấu hình; chưa kiểm tra services/runtime |
-| Bucket và naming | `scripts/init_minio.py`, MinIO init service, `docs/NAMING_CONVENTIONS.md` | Có script/quy ước; chưa xác minh bucket live |
-| Open-Meteo → Bronze | `scripts/ingest_open_meteo.py`, `dags/dag_ingest_open_meteo.py` | Có code 2016–2025 × 8 điểm; chưa kiểm tra data coverage |
+| Bucket và naming | `scripts/init_minio.py`, MinIO init service, `docs/NAMING_CONVENTIONS.md` | Đã xác minh live: 3 bucket `bronze`, `silver`, `gold` hoạt động trên MinIO |
+| Open-Meteo → Bronze | `scripts/ingest_open_meteo.py`, `dags/dag_ingest_open_meteo.py` | Đã chạy toàn bộ: 80/80 file (8 điểm × 10 năm 2016–2025, ~701.376 bản ghi theo giờ) nạp vào MinIO `bronze/` |
 | Connectivity | `dags/weather_pipeline_health_dag.py` | Có DAG kiểm tra kết nối/schema cơ bản; không chứng minh data completeness |
-| Silver/Gold | `scripts/test_minio_upload.py` | Chỉ upload synthetic sample; chưa có ETL thực |
+| Open-Meteo → Silver | `scripts/transform_open_meteo_to_silver.py` | Đã triển khai và chạy: 960 file Parquet nạp vào MinIO `silver/weather_hourly/` (701.376 bản ghi giờ làm sạch, 100% đủ giờ, kèm báo cáo DQ) |
+| Gold / DW Loader | `scripts/test_minio_upload.py` | Chỉ upload synthetic sample; chưa có ETL Gold và DW loader thực |
 | DW | `sql/init_dwh_schema.sql`, init shell | Có schema/seed một số Dim; chưa xác minh live DB/loader |
-| ERA5, Meteostat/NOAA, GeoJSON thật | Chưa tìm thấy implementation/artifact thực trong phần kiểm kê | Cần triển khai hoặc bổ sung bằng chứng |
+| Meteostat → Bronze | `scripts/ingest_meteostat.py` | Đã triển khai và chạy: 44 file CSV thô nạp vào MinIO `bronze/meteostat/station_hourly/` (các năm trạm có phát báo giờ thực tế) |
+| Meteostat → Silver | `scripts/transform_meteostat_to_silver.py` | Đã triển khai và chạy: 518 file Parquet nạp vào MinIO `silver/weather_hourly/` (375.188 bản ghi giờ làm sạch/đổi đơn vị, bảng trạm `silver/stations/`, kèm báo cáo DQ) |
+| ERA5, NOAA, GeoJSON thật | Chưa tìm thấy implementation/artifact thực trong phần kiểm kê | Cần triển khai hoặc bổ sung bằng chứng |
 | OLAP, Power BI, CART, forecast integration | Chưa tìm thấy view/model/PBIX thực | Cần triển khai hoặc bổ sung bằng chứng |
 | Hướng dẫn AI | AGENTS gốc/con, 6 tài liệu domain, 5 weather skills | Đã viết; kết quả kiểm tra tài liệu ở bên dưới |
 

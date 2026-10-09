@@ -1,3 +1,4 @@
+
 -- ==============================================================================
 -- init_dwh_schema.sql: Star Schema Data Warehouse Khí tượng Miền Bắc
 -- Đề tài: Xây dựng kho dữ liệu khí tượng đa nguồn phục vụ phân tích xu hướng
