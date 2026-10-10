@@ -7,6 +7,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+.pytest_cache/
+.ruff_cache/
+test-results/
 
 # Distribution / packaging
 .Python
@@ -84,6 +87,8 @@ data/gold/*
 *~
 
 # Operating System files
+# Microsoft Office temporary lock files (may be in use while editing)
+~$*
 .DS_Store
 .DS_Store?
 ._*
