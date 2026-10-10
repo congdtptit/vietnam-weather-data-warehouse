@@ -1,22 +1,22 @@
-# QUY ƯỚC ĐẶT TÊN BUCKET VÀ FILE TRÊN MINIO DATA LAKE
+# MinIO Data Lake Bucket and File Naming Conventions
 
-> **Dự án**: Xây dựng kho dữ liệu khí tượng đa nguồn phục vụ phân tích xu hướng và dự báo khả năng mưa tại miền Bắc Việt Nam  
-> **Môn học**: Kho dữ liệu và Kỹ thuật khai phá dữ liệu  
-> **Kiến trúc lưu trữ**: Data Lake Medallion Architecture (MinIO) kết hợp PostgreSQL Data Warehouse (Star Schema)
+> **Project**: Multi-source weather warehouse for trend analysis and rain prediction in northern Vietnam
+> **Course**: Data Warehousing and Data Mining
+> **Storage architecture**: MinIO Medallion Data Lake with a PostgreSQL Star Schema warehouse
 
 ---
 
-## 1. TỔNG QUAN KIẾN TRÚC MEDALLION TRÊN MINIO
+## 1. MinIO Medallion Architecture
 
-Hệ thống Data Lake được tổ chức thành 3 tầng bucket chính trên MinIO:
+The Data Lake has three primary bucket layers in MinIO:
 
 ```mermaid
 flowchart TD
-    subgraph Sources["Nguồn dữ liệu đa nguồn"]
+    subgraph Sources["Multiple data sources"]
         S1["Open-Meteo (REST API/JSON)"]
         S2["ERA5 / ERA5-Land (NetCDF)"]
         S3["Meteostat / NOAA (CSV/Text)"]
-        S4["Địa giới Việt Nam (GeoJSON)"]
+        S4["Vietnam boundaries (GeoJSON)"]
     end
 
     subgraph Bronze["Bucket: bronze (Raw Zone)"]
@@ -38,7 +38,7 @@ flowchart TD
         G4["gold/predictions/..."]
     end
 
-    subgraph Serving["Tầng ứng dụng"]
+    subgraph Serving["Serving layer"]
         DWH["PostgreSQL Data Warehouse"]
         ML["Machine Learning CART (RainNext24h)"]
         BI["Power BI Dashboard"]
@@ -50,29 +50,29 @@ flowchart TD
     Gold --> DWH
     Gold --> ML
     DWH --> BI
-    ML -->|Ghi kết quả FactWeatherPrediction| DWH
+    ML -->|Write FactWeatherPrediction results| DWH
 ```
 
 ---
 
-## 2. QUY TẮC ĐẶT TÊN CHUNG (GENERAL CONVENTIONS)
+## 2. General Conventions
 
-Tài liệu này quản lý đường dẫn. Định nghĩa cột/đơn vị nằm trong [data contract](data-contract.md); grain/khóa nằm trong [warehouse schema](warehouse-schema.md); nhãn nằm trong [rain label](rain-label.md). Tọa độ/trạm bên dưới là tham chiếu ban đầu, chưa chứng minh đã xác minh metadata trạm hoặc địa giới hiện tại.
+This document owns paths. Columns/units belong to the [data contract](data-contract.md); grain/keys to [warehouse schema](warehouse-schema.md); labels to [rain label](rain-label.md). Coordinates/stations below are initial references, not evidence of verified station metadata or current boundaries.
 
-Đường dẫn `bronze/open_meteo/...` gồm bucket `bronze` và object key `open_meteo/...`. Truyền riêng hai giá trị cho MinIO; không thêm tên bucket vào key lần nữa.
+Path `bronze/open_meteo/...` consists of bucket `bronze` and object key `open_meteo/...`. Pass these separately to MinIO; do not repeat the bucket name inside the key.
 
-1. **Ký tự sử dụng**:
-   - Prefix và tên biến dùng chữ thường (`a-z`), số, gạch dưới và gạch nối. Mã địa điểm giữ chữ hoa hiện có (`HAN`, `PTO`, ...). Dấu `/`, `=`, `.` dùng cho đường dẫn, partition và phần mở rộng theo mẫu.
-   - Tuyệt đối không dùng khoảng trắng (space) và ký tự tiếng Việt có dấu.
-2. **Quy tắc phân vùng (Partitioning Pattern)**:
-   - Áp dụng chuẩn phân vùng kiểu Hive: `year=YYYY/month=MM/` (hoặc `day=DD` nếu dữ liệu lớn).
-   - Tối ưu hóa việc lọc dữ liệu theo thời gian (partition pruning) cho Apache Airflow và các engine như DuckDB, Pandas, PyArrow.
-3. **Quy ước thời gian (Timestamp)**:
-   - Tên file sử dụng format `YYYYMMDD` (ngày) hoặc `YYYYMM` (tháng).
-   - Nội dung lưu chuẩn UTC có timezone; có thể thêm `timestamp_local` suy ra theo `Asia/Ho_Chi_Minh` UTC+07:00. Giờ local không thay UTC canonical.
-4. **Mã địa điểm chuẩn (Location Code)**:
-   - Sử dụng mã 3 ký tự chuẩn đại diện cho các tỉnh/thành phố miền Bắc:
-     * `HAN`: Hà Nội (Trạm Láng)
+1. **Characters**:
+   - Prefixes/variable names use lowercase (`a-z`), digits, underscores, and hyphens. Preserve uppercase location codes (`HAN`, `PTO`, ...). Use `/`, `=`, `.` for paths, partitions, and extensions as shown.
+   - Do not use spaces or accented Vietnamese characters in object paths.
+2. **Partitioning pattern**:
+   - Use Hive-style partitions: `year=YYYY/month=MM/` (or `day=DD` for larger datasets).
+   - Support time filtering and partition pruning for Apache Airflow and engines such as DuckDB, Pandas, and PyArrow.
+3. **Timestamp conventions**:
+   - Filenames use `YYYYMMDD` for days or `YYYYMM` for months.
+   - Store timezone-aware UTC. Optionally add `timestamp_local` derived using `Asia/Ho_Chi_Minh` UTC+07:00; local time does not replace canonical UTC.
+4. **Stable location codes**:
+   - Use the established three-character codes for northern Vietnam research locations:
+     * `HAN`: Hà Nội (Lang station)
      * `PTO`: Phú Thọ
      * `TNG`: Thái Nguyên
      * `TUQ`: Tuyên Quang
@@ -83,77 +83,77 @@ Tài liệu này quản lý đường dẫn. Định nghĩa cột/đơn vị n�
 
 ---
 
-## 3. CHI TIẾT TẦNG BRONZE (RAW ZONE)
+## 3. Bronze Layer (Raw Zone)
 
-### 3.1. Mục đích
-- Lưu trữ dữ liệu thô **nguyên bản 100%** từ các nguồn thu thập (Open-Meteo, ERA5, Meteostat, GeoJSON).
-- Không chỉnh sửa nội dung, không loại bỏ trường dữ liệu, không đổi định dạng.
-- Đảm bảo khả năng tái tạo (reproducibility) toàn bộ quy trình khi cần chạy lại pipeline.
+### 3.1. Purpose
+- Store **unaltered original** raw data from Open-Meteo, ERA5, Meteostat, and GeoJSON sources.
+- Do not modify content, remove fields, or change formats.
+- Preserve reproducibility when rerunning the pipeline.
 
-Đây là mục tiêu bảo toàn raw payload. Script Open-Meteo hiện thêm `_pipeline_metadata` vào JSON và serialize lại, chưa đáp ứng nguyên bản 100%. Metadata cần tách riêng khi sửa ingestion; xem [tiến độ](progress.md).
+This is the raw-preservation target. Current Open-Meteo ingestion adds `_pipeline_metadata` and reserializes JSON, so it does not meet that target. Separate metadata when fixing ingestion; see [progress](progress.md).
 
-### 3.2. Cấu trúc đường dẫn tổng quát
+### 3.2. General Path Structure
 ```
 bronze/<source_name>/<data_type>/year=YYYY/month=MM/<source_name>_<location_or_region>_<datatype>_<time_range>.<ext>
 ```
 
-Mẫu theo tháng dùng cho request theo tháng. Ingestion Open-Meteo hiện tải theo năm, hỗ trợ key thực tế `open_meteo/hourly/year=YYYY/open_meteo_<LOCATION>_hourly_<YYYY>0101_<YYYY>1231.json` trong bucket Bronze. Không di chuyển object hiện có chỉ để khớp ví dụ tháng; producer/consumer phải thống nhất window và key.
+Monthly examples apply to monthly requests. Current Open-Meteo ingestion downloads annually and uses key `open_meteo/hourly/year=YYYY/open_meteo_<LOCATION>_hourly_<YYYY>0101_<YYYY>1231.json` in Bronze. Do not move existing objects solely to match monthly examples; producers/consumers must agree on windows and keys.
 
-### 3.3. Quy ước theo từng nguồn dữ liệu
+### 3.3. Source-specific Conventions
 
-| Nguồn | Định dạng | Cấu trúc đường dẫn (Object Path) | Ví dụ cụ thể |
+| Source | Format | Object path structure | Example |
 |---|---|---|---|
 | **Open-Meteo** | `.json` | `open_meteo/hourly/year=YYYY/month=MM/open_meteo_<location>_hourly_<start_date>_<end_date>.json` | `bronze/open_meteo/hourly/year=2024/month=05/open_meteo_HAN_hourly_20240501_20240531.json` |
 | **ERA5 / ERA5-Land** | `.nc` | `era5/reanalysis/year=YYYY/month=MM/era5_north_vietnam_hourly_<YYYYMM>.nc` | `bronze/era5/reanalysis/year=2024/month=05/era5_north_vietnam_hourly_202405.nc` |
 | **Meteostat** | `.csv` | `meteostat/station_hourly/year=YYYY/meteostat_station_<station_id>_hourly_<YYYY>.csv` | `bronze/meteostat/station_hourly/year=2024/meteostat_station_48820_hourly_2024.csv` |
 | **NOAA** | `.csv` / `.txt` | `noaa/station_hourly/year=YYYY/noaa_station_<station_id>_hourly_<YYYY>.csv` | `bronze/noaa/station_hourly/year=2024/noaa_station_488200_hourly_2024.csv` |
-| **Bản đồ địa giới** | `.geojson` | `spatial/boundaries/<name>_<version>.geojson` | `bronze/spatial/boundaries/vietnam_northern_provinces_v1.geojson` |
+| **Boundary maps** | `.geojson` | `spatial/boundaries/<name>_<version>.geojson` | `bronze/spatial/boundaries/vietnam_northern_provinces_v1.geojson` |
 
 ---
 
-## 4. CHI TIẾT TẦNG SILVER (CLEANED & STANDARDIZED ZONE)
+## 4. Silver Layer (Cleaned and Standardized Zone)
 
-### 4.1. Mục đích
-- Làm sạch dữ liệu: xử lý giá trị ngoại lai (outliers), xử lý khuyết thiếu (missing values).
-- Chuẩn hóa:
-  * Múi giờ: Thống nhất `timestamp_utc` và `timestamp_local` (UTC+7).
-  * Tên cột: Sử dụng `snake_case` chuẩn hóa (`temperature_c`, `humidity_percent`, `precipitation_mm`, `pressure_hpa`, `wind_speed_ms`).
-  * Đơn vị đo: Nhiệt độ (°C), Áp suất (hPa), Lượng mưa (mm), Gió (m/s).
-- Định dạng lưu trữ: **Apache Parquet** nén `Snappy` (hiệu năng cao, tiết kiệm dung lượng, đọc theo cột tối ưu cho phân tích).
+### 4.1. Purpose
+- Clean data under agreed outlier and missing-value handling policies.
+- Normalize:
+  * Time: consistently use `timestamp_utc` and derived `timestamp_local` (UTC+7).
+  * Columns: standard `snake_case` names (`temperature_c`, `humidity_percent`, `precipitation_mm`, `pressure_hpa`, `wind_speed_ms`).
+  * Units: temperature (°C), pressure (hPa), precipitation (mm), wind speed (m/s).
+- Storage: **Apache Parquet** with `Snappy` compression for efficient storage and analytical column reads.
 
-### 4.2. Cấu trúc đường dẫn và ví dụ
+### 4.2. Paths and Examples
 ```
 silver/weather_hourly/year=YYYY/month=MM/weather_hourly_<location>_<YYYYMM>.parquet
 ```
 
-Mẫu trên dùng cho file gộp nguồn hoặc mẫu thử, giữ `source_name` trên mọi dòng. Nếu xuất file riêng nguồn, đề xuất key `weather_hourly/source=<source>/year=YYYY/month=MM/weather_hourly_<LOCATION>_<YYYYMM>.parquet` để tránh ghi đè. ETL Silver thực chưa triển khai; chốt strategy và cập nhật producer/consumer trước dùng mẫu mới.
+The pattern above covers combined-source files or samples, retaining `source_name` on every row. For separate source files, proposed key `weather_hourly/source=<source>/year=YYYY/month=MM/weather_hourly_<LOCATION>_<YYYYMM>.parquet` prevents overwrites. Real Silver ETL is not implemented; agree the strategy and update producers/consumers before adopting the new pattern.
 
-- **Ví dụ**:
-  * Dữ liệu thời tiết theo giờ Hà Nội:  
+- **Examples**:
+  * Hourly Hanoi weather:
     `silver/weather_hourly/year=2024/month=05/weather_hourly_HAN_202405.parquet`
-  * Dữ liệu thời tiết theo giờ Lào Cai:  
+  * Hourly Lao Cai weather:
     `silver/weather_hourly/year=2024/month=05/weather_hourly_LCA_202405.parquet`
-  * Dữ liệu trạm đo đã chuẩn hóa:  
+  * Normalized station metadata:
     `silver/stations/stations_metadata_cleaned.parquet`
-  * Báo cáo chất lượng dữ liệu (Data Quality Reports):  
+  * Data quality reports:
     `silver/quality_reports/dq_report_20240501.json`
 
 ---
 
-## 5. CHI TIẾT TẦNG GOLD (CURATED / WAREHOUSE STAGING & ML ZONE)
+## 5. Gold Layer (Curated / Warehouse Staging and ML Zone)
 
-### 5.1. Mục đích
-- Tổng hợp đa chiều và ánh xạ trực tiếp sang các bảng **Star Schema** của PostgreSQL Data Warehouse:
+### 5.1. Purpose
+- Prepare multidimensional products mapped to PostgreSQL **Star Schema** tables:
   * Fact: `fact_weather_observation`
   * Dimensions: `dim_date`, `dim_time`, `dim_location`, `dim_source`, `dim_station`
-- Tạo bộ thuộc tính (Feature Store) phục vụ bài toán Khai phá dữ liệu với thuật toán Cây quyết định CART:
-  * Nhãn: `RainNext24h` (0 / 1 hoặc No / Yes).
-  * Đặc trưng: Trễ nhiệt độ, trễ áp suất, tổng lượng mưa 3h/6h/12h trước, biến đổi theo mùa.
-- Lưu trữ kết quả dự báo: `fact_weather_prediction`.
+- Build feature datasets for CART classification:
+  * Label: `RainNext24h` (0 / 1 or No / Yes).
+  * Features: temperature/pressure lags, preceding 3h/6h/12h rainfall totals, and seasonal variation.
+- Store predictions: `fact_weather_prediction`.
 
-### 5.2. Cấu trúc đường dẫn và ví dụ
+### 5.2. Paths and Examples
 
-| Nhóm dữ liệu | Cấu trúc đường dẫn | Ví dụ |
+| Data group | Path structure | Example |
 |---|---|---|
 | **Fact Observation** | `fact_weather_observation/year=YYYY/month=MM/fact_weather_observation_<YYYYMM>.parquet` | `gold/fact_weather_observation/year=2024/month=05/fact_weather_observation_202405.parquet` |
 | **Dim Date** | `dim_date/dim_date.parquet` | `gold/dim_date/dim_date.parquet` |
@@ -161,13 +161,13 @@ Mẫu trên dùng cho file gộp nguồn hoặc mẫu thử, giữ `source_name`
 | **Dim Source** | `dim_source/dim_source.parquet` | `gold/dim_source/dim_source.parquet` |
 | **Dim Station** | `dim_station/dim_station.parquet` | `gold/dim_station/dim_station.parquet` |
 | **ML Dataset (CART)** | `ml_features/cart_rain_prediction_<split>_<version>.parquet` | `gold/ml_features/cart_rain_train_2016_2023_v1.parquet`<br>`gold/ml_features/cart_rain_val_2024_v1.parquet`<br>`gold/ml_features/cart_rain_test_2025_v1.parquet` |
-| **Dự báo mô hình** | `predictions/year=YYYY/month=MM/rain_predictions_cart_<YYYYMMDD>.parquet` | `gold/predictions/year=2024/month=05/rain_predictions_cart_20240501.parquet` |
+| **Model predictions** | `predictions/year=YYYY/month=MM/rain_predictions_cart_<YYYYMMDD>.parquet` | `gold/predictions/year=2024/month=05/rain_predictions_cart_20240501.parquet` |
 
 ---
 
-## 6. DANH MỤC ĐỊA ĐIỂM NGHIÊN CỨU MIỀN BẮC (LOCATION REFERENCE TABLE)
+## 6. Northern Vietnam Research Location References
 
-| Mã địa điểm (`location_code`) | Tên địa phương | Vĩ độ (`latitude`) | Kinh độ (`longitude`) | Độ cao ước tính (`elevation_m`) | Mã trạm WMO tham chiếu |
+| Location code (`location_code`) | Location name | Latitude (`latitude`) | Longitude (`longitude`) | Estimated elevation (`elevation_m`) | Reference WMO station |
 |:---:|---|:---:|:---:|:---:|:---:|
 | **HAN** | Hà Nội | 21.0285 | 105.8542 | 10 m | 48820 (Láng) |
 | **PTO** | Phú Thọ | 21.3986 | 105.2280 | 25 m | 48825 (Việt Trì) |
@@ -180,17 +180,17 @@ Mẫu trên dùng cho file gộp nguồn hoặc mẫu thử, giữ `source_name`
 
 ---
 
-## 7. BẢNG ÁNH XẠ THUỘC TÍNH VÀ ĐƠN VỊ ĐO CHUẨN HÓA
+## 7. Standard Attribute and Unit Mapping
 
-Mapping dưới đây là định hướng ban đầu, không là phép đổi đơn vị áp dụng mù quáng. Đọc metadata từng sản phẩm: phân biệt surface/sea-level pressure; xác định loại radiation, interval và accumulation trước khi đổi W/m². Kiểu PostgreSQL chính thức xem DDL/schema; kiểu trao đổi Silver xem data contract.
+These mappings are initial guidance, not unconditional conversions. Read product metadata: distinguish surface/sea-level pressure and establish radiation type, interval, and accumulation before conversion to W/m². Official PostgreSQL types are in DDL/schema; Silver exchange types are in the data contract.
 
-| Tên trường thô (Raw Names) | Tên trường chuẩn hóa (Silver/Gold) | Đơn vị đo | Kiểu dữ liệu | Ý nghĩa |
+| Raw names | Standard name (Silver/Gold) | Unit | Data type | Meaning |
 |---|---|:---:|:---:|---|
-| `temperature_2m`, `temp`, `t2m` | `temperature_c` | °C | `FLOAT` / `NUMERIC(5,2)` | Nhiệt độ không khí |
-| `relative_humidity_2m`, `rhum`, `r` | `humidity_percent` | % | `FLOAT` / `NUMERIC(5,2)` | Độ ẩm tương đối |
-| `surface_pressure`, `pres`, `sp` | `pressure_hpa` | hPa | `FLOAT` / `NUMERIC(7,2)` | Áp suất khí quyển |
-| `precipitation`, `prcp`, `tp` | `precipitation_mm` | mm | `FLOAT` / `NUMERIC(6,2)` | Lượng mưa theo giờ |
-| `wind_speed_10m`, `wspd`, `si10` | `wind_speed_ms` | m/s | `FLOAT` / `NUMERIC(5,2)` | Tốc độ gió tại 10m |
-| `wind_direction_10m`, `wdir` | `wind_direction_deg` | độ (0-360) | `INT` / `NUMERIC(5,2)` | Hướng gió |
-| `cloud_cover`, `tcc` | `cloud_cover_percent` | % | `FLOAT` / `NUMERIC(5,2)` | Độ che phủ mây |
-| `surface_solar_radiation_downwards` | `solar_radiation_wm2` | W/m² | `FLOAT` / `NUMERIC(7,2)` | Bức xạ mặt trời |
+| `temperature_2m`, `temp`, `t2m` | `temperature_c` | °C | `FLOAT` / `NUMERIC(5,2)` | Air temperature |
+| `relative_humidity_2m`, `rhum`, `r` | `humidity_percent` | % | `FLOAT` / `NUMERIC(5,2)` | Relative humidity |
+| `surface_pressure`, `pres`, `sp` | `pressure_hpa` | hPa | `FLOAT` / `NUMERIC(7,2)` | Atmospheric pressure |
+| `precipitation`, `prcp`, `tp` | `precipitation_mm` | mm | `FLOAT` / `NUMERIC(6,2)` | Hourly precipitation |
+| `wind_speed_10m`, `wspd`, `si10` | `wind_speed_ms` | m/s | `FLOAT` / `NUMERIC(5,2)` | Wind speed at 10 m |
+| `wind_direction_10m`, `wdir` | `wind_direction_deg` | degrees (0–360) | `INT` / `NUMERIC(5,2)` | Wind direction |
+| `cloud_cover`, `tcc` | `cloud_cover_percent` | % | `FLOAT` / `NUMERIC(5,2)` | Cloud cover |
+| `surface_solar_radiation_downwards` | `solar_radiation_wm2` | W/m² | `FLOAT` / `NUMERIC(7,2)` | Solar radiation |
