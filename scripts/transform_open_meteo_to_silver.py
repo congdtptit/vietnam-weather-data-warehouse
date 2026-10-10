@@ -1,48 +1,56 @@
 #!/usr/bin/env python3
-"""
-scripts/transform_open_meteo_to_silver.py
-Làm sạch và chuẩn hóa dữ liệu khí tượng Open-Meteo từ tầng Bronze (JSON)
-sang tầng Silver (Parquet) theo Hợp đồng dữ liệu (docs/data-contract.md)
-và Quy ước đặt tên (docs/NAMING_CONVENTIONS.md).
+"""scripts/transform_open_meteo_to_silver.py.
 
-Cấu trúc lưu trữ Silver:
+Clean and standardize Open-Meteo historical weather data from Bronze (JSON)
+to Silver (Parquet) according to docs/data-contract.md and docs/NAMING_CONVENTIONS.md.
+
+Silver storage structure:
   silver/weather_hourly/year=YYYY/month=MM/weather_hourly_<location>_<YYYYMM>.parquet
-Báo cáo chất lượng:
+Quality reports:
   silver/quality_reports/dq_report_open_meteo_<timestamp>.json
 """
 
-import os
-import sys
+import argparse
 import io
 import json
-import argparse
+import os
+import sys
 from datetime import datetime, timezone
+from typing import Any
+
 import pandas as pd
 from minio import Minio
 from minio.error import S3Error
+from quality_checks import (
+    compute_hourly_coverage,
+    resolve_duplicates_with_quarantine,
+    validate_and_nullify_ranges,
+)
+from station_config import CANONICAL_LOCATIONS
 
-# Cấu hình UTF-8 cho Windows console
+# Configure UTF-8 for Windows console
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
 
-# Nạp biến môi trường từ .env
+# Load environment variables from .env
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except ImportError:
     env_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
     if os.path.exists(env_file):
-        with open(env_file, "r", encoding="utf-8") as f:
+        with open(env_file, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
                     k, v = line.split("=", 1)
                     os.environ.setdefault(k.strip(), v.strip().strip("'\""))
 
-# Cấu hình MinIO
+# MinIO configuration
 MINIO_HOST = os.getenv("MINIO_EXTERNAL_ENDPOINT", "localhost:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ROOT_USER", "minioadmin")
 MINIO_SECRET_KEY = os.getenv("MINIO_ROOT_PASSWORD", "minioadmin")
@@ -50,10 +58,8 @@ MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
 BUCKET_BRONZE = os.getenv("MINIO_BUCKET_BRONZE", "bronze")
 BUCKET_SILVER = os.getenv("MINIO_BUCKET_SILVER", "silver")
 
-# 8 địa điểm nghiên cứu miền Bắc
-NORTH_LOCATIONS = ["HAN", "PTO", "TNG", "TUQ", "LCA", "HBI", "HPH", "NBI"]
+NORTH_LOCATIONS = sorted(CANONICAL_LOCATIONS)
 
-# Cột chuẩn hóa Silver theo Hợp đồng dữ liệu (docs/data-contract.md)
 SILVER_STANDARD_COLUMNS = [
     "source_name",
     "location_code",
@@ -62,21 +68,36 @@ SILVER_STANDARD_COLUMNS = [
     "temperature_c",
     "humidity_percent",
     "pressure_hpa",
+    "pressure_type",
     "precipitation_mm",
     "wind_speed_ms",
     "wind_direction_deg",
     "cloud_cover_percent",
     "solar_radiation_wm2",
-    # Các trường mở rộng hữu ích từ Open-Meteo
     "dew_point_c",
     "apparent_temperature_c",
     "weather_code",
+    "wind_gusts_ms",
+    "observation_type",
+]
+
+MEASUREMENT_COLUMNS = [
+    "temperature_c",
+    "humidity_percent",
+    "pressure_hpa",
+    "precipitation_mm",
+    "wind_speed_ms",
+    "wind_direction_deg",
+    "cloud_cover_percent",
+    "solar_radiation_wm2",
+    "dew_point_c",
+    "apparent_temperature_c",
     "wind_gusts_ms",
 ]
 
 
 def get_minio_client() -> Minio:
-    """Khởi tạo client kết nối MinIO"""
+    """Initialize MinIO client with fallback endpoint."""
     endpoint = MINIO_HOST
     try:
         client = Minio(
@@ -101,32 +122,78 @@ def get_minio_client() -> Minio:
         return client
 
 
-def clean_and_standardize_open_meteo(raw_json: dict, location_code: str) -> tuple[pd.DataFrame, dict]:
+def is_s3_not_found_error(err: S3Error) -> bool:
+    """Check if S3Error indicates a missing object rather than permission or server failure."""
+    code = getattr(err, "code", None)
+    return code in ("NoSuchKey", "ResourceNotFound")
+
+
+def clean_and_standardize_open_meteo(
+    raw_json: dict[str, Any],
+    location_code: str,
+    start_time: datetime | pd.Timestamp | str,
+    end_time: datetime | pd.Timestamp | str,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+    """Clean and standardize Open-Meteo hourly JSON into Silver schema.
+
+    Rules:
+    1. Validate canonical location code.
+    2. Parse timestamp string to UTC and Asia/Ho_Chi_Minh local time.
+    3. Pressure type: Open-Meteo provides surface_pressure, stored as pressure_type='surface'.
+    4. Range validation without clipping: negative precipitation and out-of-range humidity set to NaN.
+    5. Deduplication: deterministic on (source_name, location_code, timestamp_utc).
+       Identical duplicates are deduplicated; conflicting duplicates are quarantined.
+    6. Chronological hourly coverage calculated on [start_time, end_time).
     """
-    Quy trình làm sạch dữ liệu:
-    1. Parse timestamps UTC chuẩn và suy ra timestamp_local (Asia/Ho_Chi_Minh).
-    2. Đổi tên trường theo chuẩn snake_case và quy ước đơn vị (docs/NAMING_CONVENTIONS.md).
-    3. Kiểm tra tính duy nhất (source, location, timestamp_utc) và khử trùng lặp.
-    4. Kiểm tra lưới giờ kỳ vọng (expected chronological hourly grid) để phát hiện giờ thiếu.
-    5. Kiểm tra khoảng giá trị hợp lệ (range constraints) và làm sạch.
-    """
+    loc_clean = location_code.strip().upper()
+    if loc_clean not in CANONICAL_LOCATIONS:
+        raise ValueError(
+            f"Invalid location code '{location_code}'. Must be one of canonical {sorted(CANONICAL_LOCATIONS)}"
+        )
+
     hourly = raw_json.get("hourly", {})
     if not hourly or "time" not in hourly:
-        raise ValueError("File JSON không chứa dữ liệu hourly hợp lệ")
+        raise ValueError("JSON payload does not contain valid 'hourly.time' data")
 
     df = pd.DataFrame(hourly)
     initial_rows = len(df)
 
-    # 1. Chuẩn hóa thời gian
-    # Open-Meteo time format: 'YYYY-MM-DDTHH:MM' (được ingest với tham số timezone='UTC')
+    if df.empty:
+        coverage_stats = compute_hourly_coverage(
+            df=pd.DataFrame(),
+            start_time=start_time,
+            end_time=end_time,
+            measurement_cols=MEASUREMENT_COLUMNS,
+        )
+        empty_clean = pd.DataFrame(columns=SILVER_STANDARD_COLUMNS)
+        dq_stats = {
+            "initial_rows": 0,
+            "clean_rows": 0,
+            "quarantined_rows": 0,
+            "location_code": loc_clean,
+            "hourly_coverage": coverage_stats,
+            "deduplication": {
+                "identical_duplicates_removed": 0,
+                "conflicting_duplicates_count": 0,
+                "conflicting_groups": 0,
+                "conflicting_details": [],
+            },
+            "range_violations": {},
+            "provenance_notes": "Empty hourly payload.",
+        }
+        return empty_clean, pd.DataFrame(), dq_stats
+
+    # 1. Parse timestamps
     df["timestamp_utc"] = pd.to_datetime(df["time"], utc=True)
-    df["timestamp_local"] = df["timestamp_utc"].dt.tz_convert("Asia/Ho_Chi_Minh").dt.tz_localize(None)
+    df["timestamp_local"] = (
+        df["timestamp_utc"].dt.tz_convert("Asia/Ho_Chi_Minh").dt.tz_localize(None)
+    )
 
-    # 2. Bổ sung các định danh grain chuẩn
+    # 2. Add canonical grain identifiers
     df["source_name"] = "Open-Meteo"
-    df["location_code"] = location_code
+    df["location_code"] = loc_clean
 
-    # 3. Ánh xạ tên cột theo Hợp đồng dữ liệu
+    # 3. Rename columns per data contract
     column_mapping = {
         "temperature_2m": "temperature_c",
         "relative_humidity_2m": "humidity_percent",
@@ -142,91 +209,94 @@ def clean_and_standardize_open_meteo(raw_json: dict, location_code: str) -> tupl
     }
     df = df.rename(columns=column_mapping)
 
-    # 4. Kiểm tra trùng lặp trên Business Key: (source_name, location_code, timestamp_utc)
-    dup_mask = df.duplicated(subset=["source_name", "location_code", "timestamp_utc"], keep="first")
-    dup_count = int(dup_mask.sum())
-    if dup_count > 0:
-        df = df[~dup_mask].copy()
+    # Pressure type: explicit surface pressure
+    df["pressure_type"] = "surface"
+    df["observation_type"] = "model_reanalysis"
 
-    # Sắp xếp tăng dần theo thời gian UTC
-    df = df.sort_values("timestamp_utc").reset_index(drop=True)
+    # Ensure numeric types
+    for col in MEASUREMENT_COLUMNS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").astype("float64")
 
-    # 5. Kiểm tra lưới giờ kỳ vọng (Expected Hourly Grid)
-    start_ts = df["timestamp_utc"].min()
-    end_ts = df["timestamp_utc"].max()
-    expected_hours = len(pd.date_range(start=start_ts, end=end_ts, freq="h"))
-    actual_hours = len(df)
-    missing_hours_count = max(0, expected_hours - actual_hours)
+    # 4. Range validation without clipping
+    df_valid, range_violations = validate_and_nullify_ranges(df)
 
-    # 6. Kiểm tra và chuẩn hóa khoảng giá trị (Range & Quality Cleaning)
-    # Độ ẩm và Độ mây phải nằm trong [0, 100]%
-    out_of_range_humidity = int(((df["humidity_percent"] < 0) | (df["humidity_percent"] > 100)).sum())
-    df["humidity_percent"] = df["humidity_percent"].clip(lower=0.0, upper=100.0)
+    # 5. Order-invariant deduplication on target observation grain
+    key_cols = ["source_name", "location_code", "timestamp_utc"]
+    clean_df, quarantine_df, dedup_stats = resolve_duplicates_with_quarantine(
+        df=df_valid,
+        key_cols=key_cols,
+        measurement_cols=MEASUREMENT_COLUMNS,
+    )
 
-    out_of_range_cloud = int(((df["cloud_cover_percent"] < 0) | (df["cloud_cover_percent"] > 100)).sum())
-    df["cloud_cover_percent"] = df["cloud_cover_percent"].clip(lower=0.0, upper=100.0)
+    # 6. Chronological grid coverage check on requested [start, end) window
+    coverage_stats = compute_hourly_coverage(
+        df=clean_df,
+        start_time=start_time,
+        end_time=end_time,
+        measurement_cols=MEASUREMENT_COLUMNS,
+    )
 
-    # Mưa, gió, bức xạ không được âm
-    neg_precip = int((df["precipitation_mm"] < 0).sum())
-    df["precipitation_mm"] = df["precipitation_mm"].clip(lower=0.0)
+    available_clean_cols = [c for c in SILVER_STANDARD_COLUMNS if c in clean_df.columns]
+    clean_standard = clean_df[available_clean_cols].copy()
 
-    neg_wind = int((df["wind_speed_ms"] < 0).sum())
-    df["wind_speed_ms"] = df["wind_speed_ms"].clip(lower=0.0)
+    if not quarantine_df.empty:
+        available_q_cols = [c for c in SILVER_STANDARD_COLUMNS if c in quarantine_df.columns]
+        quarantine_standard = quarantine_df[available_q_cols].copy()
+    else:
+        quarantine_standard = pd.DataFrame(columns=SILVER_STANDARD_COLUMNS)
 
-    neg_solar = int((df["solar_radiation_wm2"] < 0).sum())
-    df["solar_radiation_wm2"] = df["solar_radiation_wm2"].clip(lower=0.0)
-
-    # Hướng gió trong [0, 360]
-    invalid_wind_dir = int(((df["wind_direction_deg"] < 0) | (df["wind_direction_deg"] > 360)).sum())
-    df["wind_direction_deg"] = df["wind_direction_deg"].clip(lower=0.0, upper=360.0)
-
-    # Lọc giữ đúng các cột chuẩn
-    available_cols = [c for c in SILVER_STANDARD_COLUMNS if c in df.columns]
-    clean_df = df[available_cols].copy()
-
-    # Thu thập chỉ số chất lượng (DQ metrics)
     dq_stats = {
         "initial_rows": initial_rows,
-        "clean_rows": len(clean_df),
-        "duplicates_removed": dup_count,
-        "expected_hours": expected_hours,
-        "missing_hours": missing_hours_count,
-        "out_of_range_corrected": {
-            "humidity": out_of_range_humidity,
-            "cloud_cover": out_of_range_cloud,
-            "precipitation_negative": neg_precip,
-            "wind_speed_negative": neg_wind,
-            "solar_radiation_negative": neg_solar,
-            "wind_direction_invalid": invalid_wind_dir,
-        },
-        "null_counts": clean_df.isnull().sum().to_dict(),
+        "clean_rows": len(clean_standard),
+        "quarantined_rows": len(quarantine_standard),
+        "location_code": loc_clean,
+        "hourly_coverage": coverage_stats,
+        "deduplication": dedup_stats,
+        "range_violations": range_violations,
+        "null_counts": {k: int(v) for k, v in clean_standard.isnull().sum().items()},
+        "provenance_notes": (
+            "Open-Meteo pressure is surface pressure (pressure_type='surface'). "
+            "Downstream consumers must not equate surface pressure with sea-level pressure."
+        ),
     }
 
-    return clean_df, dq_stats
+    return clean_standard, quarantine_standard, dq_stats
 
 
 def process_open_meteo_to_silver(
     start_year: int = 2016,
     end_year: int = 2025,
-    target_location: str = None,
+    target_location: str | None = None,
     overwrite: bool = False,
-):
-    """Xử lý chuyển đổi toàn bộ hoặc một phần Open-Meteo Bronze -> Silver"""
+) -> dict[str, Any]:
+    """Execute transformation pipeline from Open-Meteo Bronze to Silver Parquet."""
     client = get_minio_client()
 
-    locations = [target_location.upper()] if target_location else NORTH_LOCATIONS
+    if target_location:
+        loc_upper = target_location.strip().upper()
+        if loc_upper not in CANONICAL_LOCATIONS:
+            raise ValueError(
+                f"Requested location '{target_location}' is not a canonical research location: {sorted(CANONICAL_LOCATIONS)}"
+            )
+        locations = [loc_upper]
+    else:
+        locations = NORTH_LOCATIONS
+
     years = list(range(start_year, end_year + 1))
-
     total_tasks = len(locations) * len(years)
+
     print("=" * 80)
-    print(" BẮT ĐẦU CHUYỂN ĐỔI VÀ LÀM SẠCH: OPEN-METEO BRONZE -> SILVER PARQUET")
+    print(" STARTING TRANSFORMATION: OPEN-METEO BRONZE -> SILVER PARQUET")
     print("=" * 80)
-    print(f"[*] Phạm vi năm: {start_year} - {end_year} ({len(years)} năm)")
-    print(f"[*] Địa điểm: {', '.join(locations)}")
-    print(f"[*] Quy ước phân vùng: silver/weather_hourly/year=YYYY/month=MM/weather_hourly_<loc>_<YYYYMM>.parquet")
+    print(f"[*] Year range: {start_year} - {end_year} ({len(years)} years)")
+    print(f"[*] Locations: {', '.join(locations)}")
+    print(
+        "[*] Partition pattern: silver/weather_hourly/year=YYYY/month=MM/weather_hourly_<loc>_<YYYYMM>.parquet"
+    )
     print("=" * 80)
 
-    overall_dq = {
+    overall_dq: dict[str, Any] = {
         "pipeline": "Open-Meteo Bronze to Silver",
         "processed_at": datetime.now(timezone.utc).isoformat(),
         "years": years,
@@ -234,111 +304,215 @@ def process_open_meteo_to_silver(
         "total_files_transformed": 0,
         "total_monthly_parquet_created": 0,
         "total_records_processed": 0,
-        "total_duplicates_removed": 0,
+        "total_identical_duplicates_removed": 0,
+        "total_conflicting_duplicates_quarantined": 0,
         "total_missing_hours": 0,
         "details_by_location_year": {},
+        "failures": [],
     }
 
     current_task = 0
 
     for loc in locations:
-        print(f"\n>>> Đang xử lý địa điểm: [{loc}]")
+        print(f"\n>>> Processing location: [{loc}]")
 
         for year in years:
             current_task += 1
-            bronze_key = f"open_meteo/hourly/year={year}/open_meteo_{loc}_hourly_{year}0101_{year}1231.json"
+            bronze_key = (
+                f"open_meteo/hourly/year={year}/open_meteo_{loc}_hourly_{year}0101_{year}1231.json"
+            )
+            start_window = f"{year}-01-01 00:00:00+00:00"
+            end_window = f"{year + 1}-01-01 00:00:00+00:00"
 
-            # 1. Đọc dữ liệu từ Bronze
+            # 1. Read Bronze JSON
             try:
                 obj = client.get_object(BUCKET_BRONZE, bronze_key)
                 raw_bytes = obj.read()
                 raw_json = json.loads(raw_bytes.decode("utf-8"))
-            except S3Error as e:
-                print(f"  [{current_task}/{total_tasks}] Năm {year}: Không tìm thấy Bronze {bronze_key} ({e})")
-                continue
+            except S3Error as s3_err:
+                if is_s3_not_found_error(s3_err):
+                    print(
+                        f"  [{current_task}/{total_tasks}] Year {year}: Bronze file not found: {bronze_key}"
+                    )
+                    continue
+                else:
+                    print(
+                        f"  [{current_task}/{total_tasks}] Year {year}: S3Error reading Bronze {bronze_key}: {s3_err}"
+                    )
+                    overall_dq["failures"].append(
+                        {
+                            "location_code": loc,
+                            "year": year,
+                            "stage": "read_bronze_s3",
+                            "error": str(s3_err),
+                        }
+                    )
+                    continue
             except Exception as e:
-                print(f"  [{current_task}/{total_tasks}] Năm {year}: Lỗi đọc Bronze: {e}")
+                print(f"  [{current_task}/{total_tasks}] Year {year}: Error reading Bronze: {e}")
+                overall_dq["failures"].append(
+                    {
+                        "location_code": loc,
+                        "year": year,
+                        "stage": "read_bronze",
+                        "error": str(e),
+                    }
+                )
                 continue
 
-            # 2. Làm sạch & Chuẩn hóa
-            clean_df, dq_stats = clean_and_standardize_open_meteo(raw_json=raw_json, location_code=loc)
+            # 2. Clean & standardize
+            try:
+                clean_df, quarantine_df, dq_stats = clean_and_standardize_open_meteo(
+                    raw_json=raw_json,
+                    location_code=loc,
+                    start_time=start_window,
+                    end_time=end_window,
+                )
+            except Exception as e:
+                print(f"  [{current_task}/{total_tasks}] Year {year}: Transformation error: {e}")
+                overall_dq["failures"].append(
+                    {
+                        "location_code": loc,
+                        "year": year,
+                        "stage": "transformation",
+                        "error": str(e),
+                    }
+                )
+                continue
 
             task_key = f"{loc}_{year}"
             overall_dq["details_by_location_year"][task_key] = dq_stats
             overall_dq["total_files_transformed"] += 1
             overall_dq["total_records_processed"] += len(clean_df)
-            overall_dq["total_duplicates_removed"] += dq_stats["duplicates_removed"]
-            overall_dq["total_missing_hours"] += dq_stats["missing_hours"]
+            overall_dq["total_identical_duplicates_removed"] += dq_stats["deduplication"][
+                "identical_duplicates_removed"
+            ]
+            overall_dq["total_conflicting_duplicates_quarantined"] += dq_stats["deduplication"][
+                "conflicting_duplicates_count"
+            ]
+            overall_dq["total_missing_hours"] += dq_stats["hourly_coverage"]["missing_hours"]
 
-            # 3. Phân vùng theo tháng và ghi ra Parquet (theo docs/NAMING_CONVENTIONS.md)
-            clean_df["year_month"] = clean_df["timestamp_utc"].dt.strftime("%Y%m")
-            months_grouped = clean_df.groupby("year_month")
+            # 3. Partition by month and write to Parquet
+            if not clean_df.empty:
+                clean_df["year_month"] = clean_df["timestamp_utc"].dt.strftime("%Y%m")
+                months_grouped = clean_df.groupby("year_month")
 
-            created_months = 0
-            for ym_str, group in months_grouped:
-                y_str = ym_str[:4]
-                m_str = ym_str[4:]
-                silver_key = f"weather_hourly/year={y_str}/month={m_str}/weather_hourly_{loc}_{ym_str}.parquet"
+                created_months = 0
+                for ym_str, group in months_grouped:
+                    y_str = ym_str[:4]
+                    m_str = ym_str[4:]
+                    silver_key = f"weather_hourly/year={y_str}/month={m_str}/weather_hourly_{loc}_{ym_str}.parquet"
 
-                # Kiểm tra ghi đè
-                if not overwrite:
+                    if not overwrite:
+                        try:
+                            stat = client.stat_object(BUCKET_SILVER, silver_key)
+                            if stat.size > 500:
+                                created_months += 1
+                                continue
+                        except S3Error as s3_err:
+                            if not is_s3_not_found_error(s3_err):
+                                overall_dq["failures"].append(
+                                    {
+                                        "location_code": loc,
+                                        "year": year,
+                                        "stage": "stat_silver",
+                                        "error": str(s3_err),
+                                    }
+                                )
+                                continue
+
+                    parquet_buf = io.BytesIO()
+                    export_df = group.drop(columns=["year_month"]).reset_index(drop=True)
+                    export_df.to_parquet(
+                        parquet_buf, index=False, engine="pyarrow", compression="snappy"
+                    )
+                    parquet_bytes = parquet_buf.getvalue()
+
                     try:
-                        stat = client.stat_object(BUCKET_SILVER, silver_key)
-                        if stat.size > 500:
-                            created_months += 1
-                            continue
-                    except S3Error:
-                        pass
+                        client.put_object(
+                            bucket_name=BUCKET_SILVER,
+                            object_name=silver_key,
+                            data=io.BytesIO(parquet_bytes),
+                            length=len(parquet_bytes),
+                            content_type="application/octet-stream",
+                        )
+                        created_months += 1
+                        overall_dq["total_monthly_parquet_created"] += 1
+                    except Exception as upload_err:
+                        print(f"  [!] Failed to upload {silver_key}: {upload_err}")
+                        overall_dq["failures"].append(
+                            {
+                                "location_code": loc,
+                                "year": year,
+                                "stage": "upload_silver",
+                                "error": str(upload_err),
+                            }
+                        )
 
-                # Xuất ra Parquet bộ nhớ đệm
-                parquet_buf = io.BytesIO()
-                # Loại bỏ cột phụ year_month trước khi lưu
-                export_df = group.drop(columns=["year_month"]).reset_index(drop=True)
-                export_df.to_parquet(parquet_buf, index=False, engine="pyarrow", compression="snappy")
-                parquet_bytes = parquet_buf.getvalue()
-
-                # Upload lên MinIO Silver
-                client.put_object(
-                    bucket_name=BUCKET_SILVER,
-                    object_name=silver_key,
-                    data=io.BytesIO(parquet_bytes),
-                    length=len(parquet_bytes),
-                    content_type="application/octet-stream",
+                cov = dq_stats["hourly_coverage"]
+                print(
+                    f"  [{current_task}/{total_tasks}] Year {year}: Done ({len(clean_df):,} records, "
+                    f"coverage: {cov['record_coverage_pct']}% of {cov['expected_hours']}h, "
+                    f"missing: {cov['missing_hours']}h, quarantined: {dq_stats['quarantined_rows']})"
                 )
-                created_months += 1
-                overall_dq["total_monthly_parquet_created"] += 1
+            else:
+                print(
+                    f"  [{current_task}/{total_tasks}] Year {year}: Clean records is 0 (all quarantined or empty)."
+                )
 
-            missing_flag = f", thiếu {dq_stats['missing_hours']}h" if dq_stats["missing_hours"] > 0 else ", 100% đủ giờ"
-            print(f"  [{current_task}/{total_tasks}] Năm {year}: Xong ({len(clean_df):,} bản ghi -> {created_months} file tháng Parquet{missing_flag})")
-
-    # 4. Ghi báo cáo chất lượng dữ liệu vào Silver: silver/quality_reports/
+    # 4. Write DQ report to Silver
     now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
     dq_report_key = f"quality_reports/dq_report_open_meteo_{now_str}.json"
     dq_json_bytes = json.dumps(overall_dq, indent=2, ensure_ascii=False).encode("utf-8")
-    client.put_object(
-        bucket_name=BUCKET_SILVER,
-        object_name=dq_report_key,
-        data=io.BytesIO(dq_json_bytes),
-        length=len(dq_json_bytes),
-        content_type="application/json",
-    )
+    try:
+        client.put_object(
+            bucket_name=BUCKET_SILVER,
+            object_name=dq_report_key,
+            data=io.BytesIO(dq_json_bytes),
+            length=len(dq_json_bytes),
+            content_type="application/json",
+        )
+    except Exception as dq_err:
+        overall_dq["failures"].append({"stage": "write_dq_report", "error": str(dq_err)})
 
     print("\n" + "=" * 80)
-    print(" KẾT QUẢ CHUYỂN ĐỔI OPEN-METEO TẦNG SILVER:")
-    print(f"  + Số file Bronze đã xử lý       : {overall_dq['total_files_transformed']}")
-    print(f"  + Tổng số file Parquet tạo ra   : {overall_dq['total_monthly_parquet_created']}")
-    print(f"  + Tổng số bản ghi quan trắc giờ : {overall_dq['total_records_processed']:,}")
-    print(f"  + Số bản ghi trùng lặp đã khử   : {overall_dq['total_duplicates_removed']}")
-    print(f"  + Báo cáo chất lượng dữ liệu    : silver/{dq_report_key}")
+    print(" OPEN-METEO SILVER TRANSFORMATION SUMMARY:")
+    print(f"  + Bronze files processed          : {overall_dq['total_files_transformed']}")
+    print(f"  + Silver monthly Parquet files     : {overall_dq['total_monthly_parquet_created']}")
+    print(f"  + Hourly observation records       : {overall_dq['total_records_processed']:,}")
+    print(
+        f"  + Identical duplicates removed     : {overall_dq['total_identical_duplicates_removed']}"
+    )
+    print(
+        f"  + Conflicting records quarantined  : {overall_dq['total_conflicting_duplicates_quarantined']}"
+    )
+    print(f"  + Total missing hours across years : {overall_dq['total_missing_hours']}")
+    print(f"  + Failures encountered             : {len(overall_dq['failures'])}")
+    print(f"  + Data Quality report              : silver/{dq_report_key}")
     print("=" * 80)
+
+    if overall_dq["failures"]:
+        raise RuntimeError(
+            f"Open-Meteo transformation encountered {len(overall_dq['failures'])} failure(s). "
+            "Failing process to trigger Airflow retry."
+        )
+
+    return overall_dq
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Làm sạch và chuyển đổi Open-Meteo Bronze sang Silver Parquet")
-    parser.add_argument("--start-year", type=int, default=2016, help="Năm bắt đầu (mặc định: 2016)")
-    parser.add_argument("--end-year", type=int, default=2025, help="Năm kết thúc (mặc định: 2025)")
-    parser.add_argument("--location", type=str, default=None, help="Mã địa điểm cụ thể (ví dụ: HAN) hoặc để trống cho cả 8 địa điểm")
-    parser.add_argument("--overwrite", action="store_true", help="Ghi đè file nếu đã tồn tại trên Silver")
+    parser = argparse.ArgumentParser(
+        description="Transform Open-Meteo Bronze JSON to Silver Parquet"
+    )
+    parser.add_argument("--start-year", type=int, default=2016, help="Start year (default: 2016)")
+    parser.add_argument("--end-year", type=int, default=2025, help="End year (default: 2025)")
+    parser.add_argument(
+        "--location",
+        type=str,
+        default=None,
+        help="Canonical location code (e.g. HAN) or omit for all 8 locations",
+    )
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing Silver files")
 
     args = parser.parse_args()
 
@@ -349,9 +523,10 @@ if __name__ == "__main__":
             target_location=args.location,
             overwrite=args.overwrite,
         )
+        sys.exit(0)
     except KeyboardInterrupt:
-        print("\n[!] Tiến trình bị dừng bởi người dùng.")
+        print("\n[!] Process interrupted by user.")
         sys.exit(0)
     except Exception as e:
-        print(f"\n[!] Lỗi: {e}")
+        print(f"\n[!] Error: {e}", file=sys.stderr)
         sys.exit(1)

@@ -1,50 +1,202 @@
-# Tiến độ và bằng chứng
+# Progress and Evidence
 
-Kiểm kê ngày **08/10/2026** (giờ Việt Nam). Nguồn: đọc code/cấu hình/tài liệu trong repo. Lượt này không chạy Docker, API, backfill, SQL trên database hoặc huấn luyện mô hình; vì vậy trạng thái runtime chưa xác minh.
+Inventory dated **2026-10-08** (Vietnam time), based on repository code/configuration/documents. That inventory did not run Docker, APIs, backfills, live SQL, or model training, so runtime was unverified at that point. Later dated entries record subsequent verification.
 
-Workbook `Phan_cong_cong_viec_DW_khi_tuong.xlsx` là nơi quản lý phân công 40 việc và người phụ trách. Tài liệu này ghi bằng chứng kỹ thuật và hạn chế, không tạo bảng trạng thái phân công song song. Không đánh dấu hoàn thành trong workbook từ việc file code tồn tại.
+Workbook `Phan_cong_cong_viec_DW_khi_tuong.xlsx` owns the 40 task assignments and responsible members. This document records technical evidence and limitations, not a parallel assignment-status tracker. Code file existence alone must not mark a workbook task complete.
 
-## Kiểm kê
+## Inventory
 
-| Hạng mục | Bằng chứng | Trạng thái xác minh |
+| Item | Evidence | Verification status |
 | --- | --- | --- |
-| Hạ tầng | `docker-compose.yml`, `.env.example`, `Dockerfile` | Có cấu hình; chưa kiểm tra services/runtime |
-| Bucket và naming | `scripts/init_minio.py`, MinIO init service, `docs/NAMING_CONVENTIONS.md` | Đã xác minh live: 3 bucket `bronze`, `silver`, `gold` hoạt động trên MinIO |
-| Open-Meteo → Bronze | `scripts/ingest_open_meteo.py`, `dags/dag_ingest_open_meteo.py` | Đã chạy toàn bộ: 80/80 file (8 điểm × 10 năm 2016–2025, ~701.376 bản ghi theo giờ) nạp vào MinIO `bronze/` |
-| Connectivity | `dags/weather_pipeline_health_dag.py` | Có DAG kiểm tra kết nối/schema cơ bản; không chứng minh data completeness |
-| Open-Meteo → Silver | `scripts/transform_open_meteo_to_silver.py` | Đã triển khai và chạy: 960 file Parquet nạp vào MinIO `silver/weather_hourly/` (701.376 bản ghi giờ làm sạch, 100% đủ giờ, kèm báo cáo DQ) |
-| Gold / DW Loader | `scripts/test_minio_upload.py` | Chỉ upload synthetic sample; chưa có ETL Gold và DW loader thực |
-| DW | `sql/init_dwh_schema.sql`, init shell | Có schema/seed một số Dim; chưa xác minh live DB/loader |
-| Meteostat → Bronze | `scripts/ingest_meteostat.py` | Đã triển khai và chạy: 44 file CSV thô nạp vào MinIO `bronze/meteostat/station_hourly/` (các năm trạm có phát báo giờ thực tế) |
-| Meteostat → Silver | `scripts/transform_meteostat_to_silver.py` | Đã triển khai và chạy: 518 file Parquet nạp vào MinIO `silver/weather_hourly/` (375.188 bản ghi giờ làm sạch/đổi đơn vị, bảng trạm `silver/stations/`, kèm báo cáo DQ) |
-| ERA5, NOAA, GeoJSON thật | Chưa tìm thấy implementation/artifact thực trong phần kiểm kê | Cần triển khai hoặc bổ sung bằng chứng |
-| OLAP, Power BI, CART, forecast integration | Chưa tìm thấy view/model/PBIX thực | Cần triển khai hoặc bổ sung bằng chứng |
-| Hướng dẫn AI | AGENTS gốc/con, 6 tài liệu domain, 5 weather skills | Đã viết; kết quả kiểm tra tài liệu ở bên dưới |
+| Infrastructure | `docker-compose.yml`, `.env.example`, `Dockerfile` | Configuration exists; services/runtime were not checked |
+| Buckets and naming | `scripts/init_minio.py`, MinIO init service, `docs/NAMING_CONVENTIONS.md` | Scripts/conventions exist; live buckets unverified |
+| Open-Meteo → Bronze | `scripts/ingest_open_meteo.py`, `dags/dag_ingest_open_meteo.py` | Code covers 2016–2025 × eight points; data coverage unverified |
+| Connectivity | `dags/weather_pipeline_health_dag.py` | Basic connection/schema DAG; not evidence of data completeness |
+| Silver/Gold | Documented contracts and synthetic pytest fixtures | No real ETL; old upload demo removed on 2026-10-09 |
+| DW | `sql/init_dwh_schema.sql`, init shell | Schema and some dimension seeds exist; live DB/loader unverified |
+| ERA5, Meteostat/NOAA, real GeoJSON | No real implementation/artifacts found during inventory | Implementation or additional evidence needed |
+| OLAP, Power BI, CART, forecast integration | No real views/models/PBIX found | Implementation or additional evidence needed |
+| AI instructions | Root/scoped AGENTS, six domain documents, five weather skills | Authored; document checks below |
 
-## Sai lệch và việc cần xử lý
+## Discrepancies and follow-up work
 
-| Vấn đề | Ảnh hưởng | Bước khắc phục tiếp theo |
+| Issue | Impact | Next corrective step |
 | --- | --- | --- |
-| Open-Meteo thêm `_pipeline_metadata` rồi serialize lại JSON Bronze | Không bảo toàn payload nguyên bản theo mục tiêu | Giữ raw response riêng và metadata/manifest riêng |
-| Ingestion bắt lỗi từng file, chỉ in lỗi rồi tiếp tục | Subprocess có thể exit 0 dù thiếu file; DAG báo thành công không đầy đủ | Thu thập failures và trả lỗi sau batch; kiểm tra resume/rerun |
-| Skip dựa trên object size >2000 | Không xác minh schema/checksum/coverage | Dùng manifest và kiểm tra nội dung/phạm vi |
-| Retry mọi non-200, chưa xử lý `Retry-After` | Retry cả lỗi cấu hình, khó phản ánh lỗi đúng | Phân loại transient/permanent, retry hữu hạn |
-| Bronze actual theo năm, ví dụ naming theo tháng | Người đọc có thể nhầm phạm vi key | Đã ghi hai trường hợp hỗ trợ; không đổi key code hiện tại |
-| Gold sample thiếu timestamp, dùng giờ local, có label tương lai | Không phải dataset nạp Fact observation hợp lệ | Tách synthetic sample khỏi ETL thực; chốt calendar basis và Gold contract |
-| DDL thiếu DimDate seed, DimModel, prediction unique/origin/window | Chưa đủ nạp/đối soát dự báo | Thiết kế migration/loader sau khi chốt hợp đồng |
-| Compose không build Dockerfile; dependency runtime cài riêng | Dockerfile/requirements không chứng minh môi trường thực | Chọn cơ chế image/dependency và kiểm chứng riêng |
-| Init dùng `weather_dwh` cố định dù có `DWH_DB` | Đổi env name có thể lệch database khởi tạo | Đồng bộ cấu hình/init trước hỗ trợ tên khác |
-| Health check dùng bucket names cố định | Cấu hình bucket tùy chỉnh chưa được kiểm tra tương ứng | Đồng bộ checks với env khi sửa hạ tầng |
-| Sample GeoJSON là Point giả lập | Không phải ranh giới hành chính thật | Thu thập và version hóa GeoJSON thực |
-| Nhãn, fallback, coverage và chọn trạm chưa chốt | ETL/ML có thể tích hợp sai ngữ nghĩa | Chốt các mục mở trong data contract, schema và rain label |
+| Open-Meteo adds `_pipeline_metadata` and reserializes Bronze JSON | Original-payload preservation target not met | Separate raw response and metadata/manifests |
+| Ingestion catches per-file errors, prints them, and continues | Subprocess may exit 0 despite missing files; DAG can report incomplete success | Collect failures and raise after the batch; verify resume/reruns |
+| Skipping based on object size >2000 | Schema/checksum/coverage unverified | Use manifests and content/scope checks |
+| Retries every non-200 response without `Retry-After` | Retries configuration errors and obscures error meaning | Classify transient/permanent failures and bound retries |
+| Actual Bronze is annual; naming examples are monthly | Readers may confuse key scope | Both supported cases documented; current code keys preserved |
+| Old Gold sample lacked timestamps, used local time, and included future labels | Demo removed; real Gold loader still missing | Agree calendar basis and Gold contract when implementing real ETL |
+| DDL lacks DimDate seeds, DimModel, prediction uniqueness/origin/window | Incomplete prediction loading/reconciliation support | Design migrations/loaders after contract decisions |
+| Compose formerly bypassed Dockerfile; runtime dependencies installed separately | Addressed for Airflow image on 2026-10-09 | Build, `pip check`, and smoke tests passed; see below |
+| Init fixes `weather_dwh` despite configurable `DWH_DB` | Environment changes may target a different initialized database | Align configuration/init before supporting alternative names |
+| Healthcheck fixes bucket names | Custom bucket configuration not checked consistently | Align checks with environment when updating infrastructure |
+| GeoJSON fixture is a synthetic Point | Not real administrative boundaries | Acquire and version real GeoJSON |
+| Labels, fallback, coverage, and station selection unresolved | ETL/ML integration may use inconsistent semantics | Resolve open data-contract/schema/label decisions |
 
-## Kết quả lượt tổ chức tài liệu
+## Documentation organization results
 
-- Giữ nguyên code, cấu hình runtime, DDL, workbook phân công và 5 tên weather skill.
-- Thêm AGENTS gốc, hướng dẫn trong `scripts/`, `dags/`, `sql/`; tài liệu kiến trúc, hợp đồng, schema, nhãn và tiến độ.
-- Cập nhật README/naming và skill để trỏ đến tài liệu chính thức, phân biệt thiết kế với implementation.
-- Kiểm tra hoàn tất: 11 file Markdown dự án với 23 liên kết nội bộ hợp lệ và code fence đóng đủ; cấu trúc/frontmatter, UI metadata và document references của 5 weather skill hợp lệ. Chỉ kiểm chứng tài liệu; các kiểm thử runtime bên trên vẫn chưa thực hiện.
+- Preserved code, runtime configuration, DDL, allocation workbook, and five weather skill names.
+- Added root AGENTS and scoped instructions in `scripts/`, `dags/`, `sql/`; architecture, contract, schema, label, and progress documents.
+- Updated README/naming and skills to reference authoritative documents and distinguish design from implementation.
+- Verified 11 project Markdown files with 23 valid internal links and balanced fences; structure/frontmatter, UI metadata, and references for five weather skills passed. This verified documents only; runtime checks had not yet been performed.
 
-## Cách cập nhật
+## Updating this log
 
-Sau công việc kỹ thuật, ghi phạm vi đã chạy, số file/dòng/khóa, window, lệnh hoặc artifact làm bằng chứng, kết quả và hạn chế. Phân biệt đã viết → đã kiểm tra sample → đã chạy toàn phạm vi. Người phụ trách và trạng thái giao việc cập nhật ở workbook khi có đủ bằng chứng.
+After technical work, record executed scope, file/row/key counts, windows, commands/artifacts, results, and limitations. Distinguish authored → sample-verified → full-scope-executed. Update workbook assignment/status fields only with sufficient evidence and within the authorized workbook scope.
+
+## Airflow environment setup — 2026-10-09
+
+- Retained Airflow 2.9.3 and Python 3.10; pinned the Dockerfile base image by SHA-256. Compose builds `weather-airflow:2.9.3-python3.10` for init/webserver/scheduler, removing startup dependency installation. Older environment variable `AIRFLOW_IMAGE_NAME` is no longer used.
+- Added `requirements.in`, official Airflow 2.9.3/Python 3.10 constraints, and a `requirements.txt` lock with **183 package pins**, each with SHA-256 hashes. Resolver: uv 0.8.22, Python 3.10/Linux x86_64. Aligned SQLAlchemy 1.4.52 and s3fs 2023.12.2 with Airflow. Initial build found newer setuptools incompatible with bundled `gcloud-aio-auth`; pinned setuptools 66.1.1 and rebuilt successfully.
+- Added `.python-version`, `.dockerignore`; updated `.env.example`, README, architecture, and [environment guidance](development.md). No workbook, SQL, or pipeline edits.
+
+### Checks actually executed
+
+| Check | Result and scope |
+| --- | --- |
+| `docker compose --env-file .env.example config --quiet` and `docker compose config --quiet` | Passed using sample and existing local environments; no secret values printed |
+| Compose JSON / lockfile inspection | Three services share image/build; `_PIP_ADDITIONAL_REQUIREMENTS` removed; 183 hashed pins match direct dependencies |
+| `docker compose --env-file .env.example build airflow-webserver` | Passed on Docker Desktop Linux/amd64; `pip install --require-hashes` and `pip check` completed with `No broken requirements found.` |
+| Temporary `docker run --rm -i --network none ... --entrypoint python` container | Passed: Python 3.10, Airflow 2.9.3, SQLAlchemy 1.4.52; required libraries/providers import |
+| Synthetic smoke checks in container `/tmp` | Three UTC Parquet rows round-trip through pyarrow and fastparquet; three NetCDF values; one GeoJSON Point with CRS; CART fit on four samples and two predictions; all passed |
+| Airflow `DagBag` on read-only DAG mount | Both existing DAGs imported without errors; tasks not executed |
+| Markdown/diff | README/architecture/development/progress links and fences validated; `git diff --check` passed |
+
+Docker Desktop was opened for builds. No `compose up`, database/bucket initialization, weather API calls, historical downloads, DW loading, or real-model evaluation. Smoke tests establish library behavior on synthetic samples, not pipeline/coverage/service runtime. Temporary logs: `/private/tmp/weather-airflow-build.log` and `/private/tmp/weather-runtime-smoke.log`; not official data artifacts.
+
+Limits at this stage: apt packages not snapshot-pinned; MinIO/PostgreSQL image configuration preserved; Linux/arm64 and native macOS/Windows Python unverified. CI, pytest, Ruff, and pre-commit remained future work at this entry's date.
+
+## Structure cleanup — 2026-10-09
+
+- Removed `sql/01_init_databases.sql`: not mounted by Compose or invoked by code, duplicating database creation in `sql/01_init_postgres.sh`. Updated README tree; retained active initializer and schema.
+- Removed root `.DS_Store` and two bytecode files in `dags/__pycache__/`; these are reproducible caches.
+- Added `~$*` to `.gitignore` to exclude Office lock files. `lsof` showed the workbook lock held by Excel, so the active lock file was not deleted.
+- Kept `config/`, `plugins/`, `data/` because Compose mounts them; kept trace logs, proposal/allocation sources, and dependencies/constraints needed for builds and lock regeneration.
+- Checked references to removed SQL, existence of bind-mount sources, `docker compose config --quiet`, Markdown links/fences, and `git diff --check`. No SQL execution, service startup, or weather-data changes.
+
+## Ruff, pytest, CI, and onboarding — 2026-10-09
+
+- Added Ruff/pytest `pyproject.toml`, `.pre-commit-config.yaml`, hashed `requirements-dev.in`/lock, Makefile, `.github/workflows/ci.yml`, test Compose, five Python files in `tests/`, and a JSON fixture.
+- Dockerfile has `runtime`/`test` targets. Main Compose builds only `runtime`; `test` adds tooling and code/fixtures. Shared development dependencies are constrained by the runtime lock. `.dockerignore` is an allowlist excluding `.env`, logs, and data from builders.
+- Ruff uses E4/E7/E9/F/I and formatting for `scripts/`, `dags/`, `tests/`. Only formatting/import ordering/unused-import removal affected existing code; no ETL logic or contract changes. Hooks installed in this checkout's `.git/hooks/pre-commit`; others run `make setup`/`make hooks`.
+- Pytest collects only `tests/` and requires `WEATHER_TESTING=1`. Unit tests mock API/MinIO/subprocess and block sockets. Offline tests use `--network none`. Integration uses isolated project `weather-tests`, DB `weather_test`, separate MinIO, tmpfs, no host ports/bind mounts/production volumes, and an `internal` network. Makefile cleans up, preserves test exit status, and prints logs on failure.
+- Pull-request/main-push/manual workflow runs setup, Ruff, pre-commit, Compose configuration, offline tests, and integration with `contents: read`; no production secrets or deployment. Local configuration verified; **not yet pushed or executed on GitHub** at this stage; branch protection was recorded as not enabled at this stage.
+- Updated README, architecture, scoped DAG instructions, and [onboarding guidance](development.md).
+
+### Verification evidence
+
+| Command/check | Result |
+| --- | --- |
+| `make setup` | Passed; host tooling Python 3.12.4; pytest 8.3.5, Ruff 0.11.13, pre-commit 4.2.0 and hashed/locked dependencies |
+| `make lint`, pre-commit validate-config, code/test hooks, and `make precommit` | Passed; ten Python files formatted; Ruff lint/format hooks passed |
+| `make config-check` | Development and test Compose parsed successfully |
+| `make test` | **15 passed**, six integration tests deselected; Linux/amd64 container, Python **3.10.14**; test image build and `pip check` passed |
+| `make test-integration` | **6 passed**, 15 offline tests deselected; same-key Bronze rerun, MinIO health, schema/seed rerun, location uniqueness, station FK, and PostgreSQL health passed |
+| Test cleanup | Make removed three containers and the test network; PostgreSQL/MinIO tmpfs created no persistent data volumes |
+| `make build` and Docker metadata/config inspection | Runtime build passed, Airflow entrypoint preserved, no `WEATHER_TESTING`; no remaining test containers, test ports/volumes, or external network |
+| Python AST, workflow/hook YAML, fixture JSON, Markdown links/fences, `git diff --check` | Passed; syntax checks did not execute application code |
+
+The first integration run had 5 passed/1 failed: the duplicate-location fixture lacked NOT NULL `province`, so it did not reach the unique constraint. Added required fixture data and reran: 6 passed. Production schema unchanged.
+
+Data scope: **three synthetic hours** across 2024-02-29/2024-03-01, one GeoJSON Point, and four CART library samples. Integration invoked HAN/2024 ingestion, but the mocked API returned only three hours; **no full-year download**. Schema/seeds loaded only into test DB; no weather facts or real model. Bronze rerun checked object counts, not coverage or DW upserts.
+
+Limits: five offline warnings — four `schedule_interval` deprecations on Airflow 2.9.3 and one native `numpy.ndarray size changed` warning opening NetCDF. Small NetCDF round-trip passed; the warning was not fully diagnosed or hidden. Ingestion/provenance/size-skip limitations remain. GitHub runner, Windows/arm64, and real data unverified. Local results do not establish complete ETL/backfill/DW or forecast accuracy.
+
+## Simplification within project scope — 2026-10-09
+
+- CI retains `make lint` for Ruff lint/format and replaces duplicate `make precommit` execution with validate-config. Local hooks and Makefile commands remain.
+- Removed direct `fastparquet` dependency; regenerated runtime/development locks using uv 0.8.22. Runtime pins decreased **183 → 181**, removing `cramjam` as well. Parquet tests retain UTC/null round-trip checks using `pyarrow`.
+- Removed additional apt installation, including compilers, `*-dev` packages, and GDAL CLI. The digest-pinned base already contains `curl`; Python dependencies install hashed wheels with `--only-binary=:all:`. Runtime/test targets remain separate.
+- Removed demo `scripts/test_minio_upload.py`; replaced upload instructions with `make test-integration` and updated scoped instructions, README, architecture, and development. Existing bucket objects created by that demo were not deleted.
+- Removed the **project-local** React/Next.js skill and three empty Prisma/recruitment skill directories. Kept `ui-ux-pro-max`, Power BI, PostgreSQL, and four other weather skills; global skills unchanged.
+
+### Verification after simplification
+
+- `make check` completed: Ruff lint/format passed for nine Python files; both Compose configurations valid; **15 offline + 6 integration tests passed**. Runtime/test stages built without additional apt/compiler installation; both `pip check` checks passed.
+- Small NetCDF/GeoJSON/Parquet round-trips, API/DAG units, and Bronze/schema/seed/FK/uniqueness/health integration passed. The five earlier warnings remain; they were not suppressed or considered resolved.
+- `make build` recreated runtime tag. A networkless container confirmed `curl` exists and `fastparquet`/`cramjam` are absent. Test stack cleaned itself up; no test containers remained.
+- Pre-commit config, Python AST, hashes in both lockfiles, Markdown links/fences, and `git diff --check` passed. No active references to removed demos/skills remain; old names appear only in history/evidence.
+
+Data scope remains the three-hour synthetic leap-day/month-boundary fixture, one GeoJSON Point, and four CART samples; temporary integration DB/MinIO, no historical download or development DW loading. GitHub workflow and arm64/Windows unverified. The older runtime image was absent from Docker cache at the start, so no before/after image-size reduction percentage is reported. Apt removal was verified through actual Dockerfile/build/tests.
+
+## Recheck — 2026-10-10
+
+Verified checkout at commit `2f57bc1` without code/schema changes. Docker Desktop was initially stopped; opened it and reran checks through Docker.
+
+| Actual check | Result |
+| --- | --- |
+| `make check` | Exit 0: Ruff lint/format passed for nine Python files; development/test Compose valid; test target built |
+| Offline tests in `--network none` container | **15 passed**, six integration tests deselected, 9.37 seconds; Python 3.10.14, pytest 8.3.5 |
+| Integration in temporary stack | **6 passed**, 15 offline tests deselected, 5.35 seconds; Bronze upload/rerun, health tasks, schema/seed rerun, uniqueness/FK passed |
+| Cleanup | Make removed three test containers/network; filtering project `weather-tests` found no remaining containers/networks |
+| `make build` and networkless runtime container | Cached build passed; Python 3.10.14, Airflow 2.9.3, `pip check`: `No broken requirements found.`, `/usr/bin/curl` present |
+| Static checks | Pre-commit config, Python AST, workflow/hook YAML, fixture JSON, PostgreSQL initializer `bash -n`, Markdown links/fences, and `git diff --check` passed |
+
+Offline tests still report **five warnings**: four `schedule_interval` deprecations and one `numpy.ndarray size changed` when opening NetCDF. No additional fix/diagnosis. Passing tests do not eliminate the ingestion limitations above.
+
+Scope: three synthetic hours across 2024-02-29/2024-03-01, one GeoJSON Point, four CART samples; mocked Open-Meteo API and separate integration tmpfs PostgreSQL/MinIO. No development stack startup, real download, development DW loading, or historical DAG runs. Full development-stack operation, end-to-end pipeline, GitHub Actions, arm64/Windows, and forecast accuracy remain unverified; Silver/Gold, DW loader, and ML/BI artifacts remain missing. Temporary logs: `/private/tmp/weather-recheck-20261010.log` and `/private/tmp/weather-runtime-recheck-20261010.log`.
+
+## Anomaly and gap review — 2026-10-10
+
+Compared ingestion, Compose, DDL, tests, and domain contracts without code/schema changes or real-data processing.
+
+- **High priority: Airflow init may report success after migration failure.** Compose chain `airflow db migrate && ... && airflow users create ... || true && ...` applies `|| true` to the preceding chain. A matching `bash -c` simulation beginning with `false` still printed success and exited 0. This verifies shell semantics, not a deliberately failed real Airflow migration. Tests do not execute that entrypoint.
+- **MinIO init does not guarantee failure reporting.** `until mc alias set` has no timeout; bucket-creation commands lack fail-fast and end with `exit 0`. Bucket errors may be masked. Static finding; no induced runtime failure test.
+- Ingestion still masks per-file failures, skips by size, lacks response length/schema/coverage validation, and modifies raw Bronze payloads. Existing tests do not establish that batch failures reach DAG status; the skip test confirms the current size rule.
+- Custom configuration is inconsistent: initializer fixes `weather_dwh`, health tasks fix three bucket names; runtime MinIO uses `latest` while integration uses a digest. Integration does not verify all development Compose entrypoints/images.
+- DW lacks DimDate seeds/loaders/OLAP. Observation uniqueness uses date/time keys with unresolved calendar basis; predictions lack rerun keys and UTC origin/target windows. Label/coverage/fallback/station decisions remain open.
+- Real ERA5/station/boundary collectors, Silver/Gold ETL, label/features, CART artifacts, and Power BI are missing. The 21 passing tests and five warnings cover only existing implementation.
+
+Proposed order: fix init/ingestion failure status with failure tests → resolve contracts → implement a small-window Open-Meteo/Bronze/Silver/Gold/DW slice with reruns → expand sources, OLAP/BI, and CART. This is a technical-priority proposal, not an assignment change in the workbook.
+
+## Business documentation and implementation guidance — 2026-10-10
+
+- Assigned scope: study the proposal/task allocation, write business documentation, and establish progress updates after coding. No ETL/DW/ML/BI implementation was performed in this task.
+- Sources reviewed: all seven PDF pages, extracted and rendered, including the architecture diagram on page 4; four workbook sheets (`Tổng quan`, `Theo dõi công việc`, `Vai trò`, `Rủi ro`), including 40 task IDs in `Theo dõi công việc!A5:O44`. Read source values/formulas without recalculating the workbook or inferring progress from cached summaries.
+- Added [business-requirements.md](business-requirements.md): source references, objectives, scope, exchange products, acceptance criteria, open decisions, and proposal/workbook/code discrepancies.
+- Added [implementation-roadmap.md](implementation-roadmap.md): stages across 10 weeks, dependencies, all 40 IDs with acceptance evidence, bounded task prompts, and a progress-entry template.
+- Updated `AGENTS.md` and README to route AI to the new documents and require progress updates in the same turn after coding/testing, including partial or failed results.
+- Language correction: the initial business documents were written in Vietnamese despite the requested English convention. Both new documents, their templates, this progress entry, and the new README/rain-label additions now use English. `AGENTS.md` requires English for new or changed code and documentation. Preserve proper names, source payloads, workbook sheet names, stable IDs, and existing business values; historical source documents remain unchanged.
+- Updated `rain-label.md` for ID 36: week 9 threshold analysis must not turn test into model selection. ID 29 still requires selecting the threshold on validation 2024 before test 2025. No workbook edits or label decisions were approved.
+- Acceptance clarification: a verified technical base does not establish completion of every week 1 task. ID 1 requires team-machine setup; ID 4 requires real GeoJSON, ID 5 a CDS request, and IDs 6/7 agreed contracts. Full acceptance evidence is still missing. All 40 source workbook tasks currently say `Chưa bắt đầu`; their management status was preserved.
+- Checks: local Markdown links and code fences validated; all 40 roadmap IDs/week ranges matched the workbook; source PDF/workbook SHA-256 values were unchanged; `git diff --check` passed. No new frontmatter was introduced. The English revision retains the same ID mapping and source references.
+- Data scope: document/task metadata only. No services, API calls, historical downloads, SQL execution, training, or reruns of the 21 tests. Earlier test results do not verify the proposed business workflow. Acceptance criteria remain unexecuted plans. Week 1 starts on an assumed 2026-10-12 in `Tổng quan!E11`, not a newly confirmed team schedule.
+- Next step: the user selects a task ID/increment and scope; resolve dependent week 1 decisions before implementation. These documentation changes are local and have not been committed or pushed in this task.
+
+## Documentation language normalization — 2026-10-10
+
+- Translated the seven existing architecture, data contract, development, naming, progress, rain-label, and warehouse documents into English. All nine Markdown documents in `docs/`, including business requirements and the implementation roadmap, now use English prose.
+- Preserved proper location/station names, exact source filenames and workbook sheet/status references, historical evidence, pending decisions, identifiers, commands, and contract semantics. The original proposal PDF and allocation workbook were not changed.
+- Checks: English prose scan passed with explicit exceptions for source references and proper names; local Markdown links and code fences passed; original inline references, shell commands, and diagram topology were retained; all 40 roadmap task IDs/week ranges matched the workbook; source PDF/workbook SHA-256 values remained unchanged; `git diff --check` passed. No frontmatter was introduced.
+- Scope: documentation only. No executable code, schema, task ownership, source data, services, downloads, or test runs were changed. Existing runtime evidence and implementation limits remain as recorded above. Changes are local and have not been committed or pushed in this task.
+
+## Vietnamese README rewrite — 2026-10-10
+
+- Rewrote `README.md` in Vietnamese at the user's explicit request for this file. Code and the nine domain documents in `docs/` retain the English convention.
+- Recorded the README language exception in `AGENTS.md` so future AI tasks preserve this choice.
+- Consolidated the verified base status, missing business components, document/source links, setup requirements, Make commands, development endpoints, repository layout, and task-based AI workflow. Removed the outdated first-repository Git initialization instructions and added both new business documents to the directory overview.
+- Checks: a Python static check validated 18 local links, balanced code fences, all referenced Make targets, Compose services, DAG identifiers, and inclusion of all nine domain documents. No frontmatter was introduced. `git diff --check` passed.
+- Scope: documentation only; no services, test suites, data processing, schema changes, source artifact edits, or workbook status changes. Previously recorded runtime test results were cited as historical evidence, not rerun. Changes remain local and uncommitted.
+
+## Meteostat and Silver ETL Review Remediations — 2026-10-11
+
+- Related work: workbook IDs 9 (`Meteostat/NOAA → Bronze`) and 10 (`API/stations → Silver`) in `Theo dõi công việc!A13:O14`, `docs/data-contract.md` draft v0.1, and `docs/NAMING_CONVENTIONS.md` Table 6.
+- Objective/scope: Resolve code review items on Meteostat ingestion, Open-Meteo & Meteostat Silver transformations, deduplication, grid coverage, range validation, station synchronization, pressure type provenance, failure status reporting, and Ruff formatting.
+- Disentangling unverified claims: Earlier unverified notes claiming "960 files / 701,376 records / 100% đủ giờ" and "518 files / 375,188 records" are separated from verified evidence. That coverage metric was flawed (inferred from data min/max timestamps rather than research scope), and no ten-year production download was authorized or executed in this turn.
+- Changes:
+  - Authored `scripts/station_config.py`: Shared station registry across ingest and transform, validating the 8 canonical research locations from Table 6 (`HAN`, `PTO`, `TNG`, `TUQ`, `LCA`, `HBI`, `HPH`, `NBI`). Unmapped regional stations (`48806` Sơn La, `48808` Cao Bằng) are marked unmapped pending team decision, blocking invalid publication or `UNKNOWN` output.
+  - Authored `scripts/quality_checks.py`: Chronological UTC hourly grid coverage calculation over explicit `[start, end)` windows, handling leap years (8,784h in 2024 vs 8,760h in 2023) and empty DataFrames; meteorological range validation setting negative precipitation and out-of-range humidity/cloud/wind to `NaN` (no clipping to valid values); order-invariant deduplication separating identical duplicates (deterministic collapse) from conflicting duplicates (quarantine).
+  - Updated `scripts/ingest_meteostat.py`: Unified station configuration, distinct HTTP 404 (allowed skip: no reporting) vs S3/network/timeout failures, proper `is_s3_not_found_error()` (ignoring `NoSuchKey` but failing on `AccessDenied`), batch failure aggregation, and exit code 1 on failure for Airflow detection.
+  - Updated `scripts/transform_meteostat_to_silver.py`: Unified station config, grain dedup with conflict quarantine, range validation without clipping, explicit sea-level pressure type (`pressure_type = "sea_level"`), provenance retention (`station_id`, `observation_type`), grid coverage over `[start, end)`, error reporting and exit code 1 on failures.
+  - Updated `scripts/transform_open_meteo_to_silver.py`: Range validation without clipping, explicit surface pressure type (`pressure_type = "surface"`), conflict quarantine on grain, grid coverage over `[start, end)`, error reporting and exit code 1 on failures.
+  - Updated `docs/data-contract.md`: Standard observation columns table updated to record `pressure_type`, `station_id`, and `observation_type`.
+  - Authored `tests/test_silver_transformations.py`: 20 unit and small slice tests covering all 7 review scenarios.
+- Checks:
+  - `python -m ruff check scripts/ tests/`: Passed with 0 errors.
+  - `python -m ruff format --check scripts/ tests/`: Passed with 14 files formatted.
+  - `WEATHER_TESTING=1 pytest tests/test_ingestion.py tests/test_silver_transformations.py`: **27 passed in 1.20s** (7 ingestion + 20 silver transformation / quality / slice tests).
+  - Small-scope mock execution for both Open-Meteo and Meteostat transformers verified Parquet serialization and PyArrow deserialization round-trip.
+- Data scope: Small synthetic fixtures and mocks (3 synthetic hours across 2024-02-29/2024-03-01 boundary, mock CSV/JSON payloads, PyArrow table round-trip). No live external weather API calls, no MinIO production writes, and no full 10-year historical backfill.
+- Limits: Full historical backfill, DW loading, and real MinIO cluster operations remain unexecuted and unverified.

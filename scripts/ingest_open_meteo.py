@@ -13,13 +13,14 @@ HAN (Hà Nội), PTO (Phú Thọ), TNG (Thái Nguyên), TUQ (Tuyên Quang),
 LCA (Lào Cai), HBI (Hòa Bình), HPH (Hải Phòng), NBI (Ninh Bình).
 """
 
+import argparse
+import io
+import json
 import os
 import sys
-import io
 import time
-import json
-import argparse
 from datetime import datetime, timezone
+
 import requests
 from minio import Minio
 from minio.error import S3Error
@@ -34,6 +35,7 @@ if sys.platform == "win32":
 # Fallback nạp biến môi trường từ .env
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except ImportError:
     env_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
@@ -82,20 +84,20 @@ YEAR_SPLITS = {
 
 # Danh sách các trường dữ liệu khí tượng thu thập
 HOURLY_VARIABLES = [
-    "temperature_2m",          # Nhiệt độ không khí tại 2m (°C)
-    "relative_humidity_2m",    # Độ ẩm tương đối (%)
-    "dew_point_2m",            # Điểm sương (°C)
-    "apparent_temperature",    # Nhiệt độ cảm nhận (°C)
-    "precipitation",           # Tổng lượng mưa (mm) -> Target RainNext24h
-    "rain",                    # Lượng mưa dạng lỏng (mm)
-    "weather_code",            # Mã thời tiết WMO
-    "surface_pressure",        # Áp suất bề mặt khí quyển (hPa)
-    "cloud_cover",             # Độ che phủ mây tổng (%)
-    "wind_speed_10m",          # Tốc độ gió tại 10m (m/s)
-    "wind_direction_10m",      # Hướng gió tại 10m (độ)
-    "wind_gusts_10m",          # Tốc độ gió giật (m/s)
-    "direct_normal_irradiance",# Bức xạ mặt trời trực tiếp (W/m²)
-    "shortwave_radiation",     # Bức xạ sóng ngắn (W/m²)
+    "temperature_2m",  # Nhiệt độ không khí tại 2m (°C)
+    "relative_humidity_2m",  # Độ ẩm tương đối (%)
+    "dew_point_2m",  # Điểm sương (°C)
+    "apparent_temperature",  # Nhiệt độ cảm nhận (°C)
+    "precipitation",  # Tổng lượng mưa (mm) -> Target RainNext24h
+    "rain",  # Lượng mưa dạng lỏng (mm)
+    "weather_code",  # Mã thời tiết WMO
+    "surface_pressure",  # Áp suất bề mặt khí quyển (hPa)
+    "cloud_cover",  # Độ che phủ mây tổng (%)
+    "wind_speed_10m",  # Tốc độ gió tại 10m (m/s)
+    "wind_direction_10m",  # Hướng gió tại 10m (độ)
+    "wind_gusts_10m",  # Tốc độ gió giật (m/s)
+    "direct_normal_irradiance",  # Bức xạ mặt trời trực tiếp (W/m²)
+    "shortwave_radiation",  # Bức xạ sóng ngắn (W/m²)
 ]
 
 
@@ -149,7 +151,9 @@ def fetch_open_meteo_year(lat: float, lon: float, year: int, max_retries: int = 
             if resp.status_code == 200:
                 return resp.json()
             elif resp.status_code == 429:
-                print(f"      [!] Bị giới hạn tần suất (Rate limit 429), chờ {delay}s trước khi thử lại...")
+                print(
+                    f"      [!] Bị giới hạn tần suất (Rate limit 429), chờ {delay}s trước khi thử lại..."
+                )
                 time.sleep(delay)
                 delay *= 2
             else:
@@ -161,10 +165,18 @@ def fetch_open_meteo_year(lat: float, lon: float, year: int, max_retries: int = 
             time.sleep(delay)
             delay *= 2
 
-    raise RuntimeError(f"Không thể tải dữ liệu từ Open-Meteo sau {max_retries} lần thử cho năm {year}")
+    raise RuntimeError(
+        f"Không thể tải dữ liệu từ Open-Meteo sau {max_retries} lần thử cho năm {year}"
+    )
 
 
-def ingest_data(start_year: int = 2016, end_year: int = 2025, target_location: str = None, target_split: str = None, overwrite: bool = False):
+def ingest_data(
+    start_year: int = 2016,
+    end_year: int = 2025,
+    target_location: str = None,
+    target_split: str = None,
+    overwrite: bool = False,
+):
     """Quy trình thu thập và tải lên MinIO Bronze"""
     client = get_minio_client()
 
@@ -172,7 +184,9 @@ def ingest_data(start_year: int = 2016, end_year: int = 2025, target_location: s
     if target_location:
         loc_code = target_location.upper()
         if loc_code not in NORTH_LOCATIONS:
-            raise ValueError(f"Mã địa điểm không hợp lệ: {target_location}. Chọn trong: {list(NORTH_LOCATIONS.keys())}")
+            raise ValueError(
+                f"Mã địa điểm không hợp lệ: {target_location}. Chọn trong: {list(NORTH_LOCATIONS.keys())}"
+            )
         locations = {loc_code: NORTH_LOCATIONS[loc_code]}
 
     years = [y for y in range(start_year, end_year + 1) if y in YEAR_SPLITS]
@@ -211,13 +225,19 @@ def ingest_data(start_year: int = 2016, end_year: int = 2025, target_location: s
                 try:
                     stat = client.stat_object(BUCKET_BRONZE, object_path)
                     if stat.size > 2000:
-                        print(f"  [{current_idx}/{total_tasks}] (Split: {split_type.upper():<10}) {object_path} -> ĐÃ CÓ ({stat.size} bytes), bỏ qua.")
+                        print(
+                            f"  [{current_idx}/{total_tasks}] (Split: {split_type.upper():<10}) {object_path} -> ĐÃ CÓ ({stat.size} bytes), bỏ qua."
+                        )
                         skipped_count += 1
                         continue
                 except S3Error:
                     pass
 
-            print(f"  [{current_idx}/{total_tasks}] (Split: {split_type.upper():<10}) Đang tải {loc_code} năm {year} ...", end="", flush=True)
+            print(
+                f"  [{current_idx}/{total_tasks}] (Split: {split_type.upper():<10}) Đang tải {loc_code} năm {year} ...",
+                end="",
+                flush=True,
+            )
 
             try:
                 # 1. Gọi API Open-Meteo
@@ -245,7 +265,7 @@ def ingest_data(start_year: int = 2016, end_year: int = 2025, target_location: s
                 )
 
                 records = data["_pipeline_metadata"]["hourly_record_count"]
-                print(f" XONG ({records} bản ghi theo giờ, {len(json_bytes)/1024:.1f} KB)")
+                print(f" XONG ({records} bản ghi theo giờ, {len(json_bytes) / 1024:.1f} KB)")
                 success_count += 1
 
                 # Tạm dừng nhẹ 1.2s để tuân thủ fair-use policy của Open-Meteo API
@@ -263,11 +283,24 @@ def ingest_data(start_year: int = 2016, end_year: int = 2025, target_location: s
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Thu thập dữ liệu thời tiết Open-Meteo cho Data Lake Bronze")
+    parser = argparse.ArgumentParser(
+        description="Thu thập dữ liệu thời tiết Open-Meteo cho Data Lake Bronze"
+    )
     parser.add_argument("--start-year", type=int, default=2016, help="Năm bắt đầu (mặc định: 2016)")
     parser.add_argument("--end-year", type=int, default=2025, help="Năm kết thúc (mặc định: 2025)")
-    parser.add_argument("--location", type=str, default=None, help="Mã địa điểm cụ thể (ví dụ: HAN, HPH) hoặc để trống cho tất cả 8 địa điểm")
-    parser.add_argument("--split", type=str, default=None, choices=["training", "validation", "testing"], help="Lọc theo tập dữ liệu")
+    parser.add_argument(
+        "--location",
+        type=str,
+        default=None,
+        help="Mã địa điểm cụ thể (ví dụ: HAN, HPH) hoặc để trống cho tất cả 8 địa điểm",
+    )
+    parser.add_argument(
+        "--split",
+        type=str,
+        default=None,
+        choices=["training", "validation", "testing"],
+        help="Lọc theo tập dữ liệu",
+    )
     parser.add_argument("--overwrite", action="store_true", help="Ghi đè file nếu đã tồn tại")
 
     args = parser.parse_args()
@@ -278,7 +311,7 @@ if __name__ == "__main__":
             end_year=args.end_year,
             target_location=args.location,
             target_split=args.split,
-            overwrite=args.overwrite
+            overwrite=args.overwrite,
         )
     except KeyboardInterrupt:
         print("\n[!] Tiến trình bị dừng bởi người dùng.")

@@ -2,7 +2,7 @@
 
 Read `../docs/architecture.md`, relevant portions of `../docs/data-contract.md`, and the invoked scripts before modifying a DAG. Use `weather-etl-airflow`; use `weather-data-quality` for quality gates.
 
-- Check the configured Airflow version before selecting APIs. Current Compose defaults to Airflow 2.9.3; it does not build the custom Dockerfile.
+- Check the configured Airflow version before selecting APIs. Current Compose builds the Dockerfile `runtime` target with Airflow 2.9.3/Python 3.10; the separate test stack builds target `test`.
 - No network calls or data processing at DAG import. XCom carries small object references/manifests, not datasets.
 - Historical and scheduled tasks use explicit windows or data intervals, not wall-clock time. Configure catchup, retries, concurrency, and backfill scope deliberately.
 - Only advance incremental watermarks after downstream publication/commit succeeds. Reruns and overlapping windows must not create duplicate observations or forecasts.

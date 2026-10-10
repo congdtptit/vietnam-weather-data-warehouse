@@ -1,72 +1,66 @@
 #!/usr/bin/env python3
-"""
-scripts/ingest_meteostat.py
-Thu thập dữ liệu quan trắc trạm khí tượng lịch sử từ Meteostat Bulk Data Archive
-và lưu trữ nguyên bản (Raw CSV) vào tầng Bronze trên MinIO Data Lake.
+"""scripts/ingest_meteostat.py.
 
-Cấu trúc đường dẫn Bronze (theo docs/NAMING_CONVENTIONS.md):
+Collect historical weather observation data from the Meteostat Bulk Data Archive
+and store unaltered raw CSV bytes into the Bronze layer on MinIO Data Lake.
+
+Bronze path structure (per docs/NAMING_CONVENTIONS.md):
   meteostat/station_hourly/year=YYYY/meteostat_station_<station_id>_hourly_<YYYY>.csv
 """
 
+import argparse
+import gzip
+import io
 import os
 import sys
-import io
-import gzip
 import time
-import argparse
 from datetime import datetime, timezone
+from typing import Any
+
 import requests
 from minio import Minio
 from minio.error import S3Error
+from station_config import (
+    STATION_REGISTRY,
+    get_canonical_stations,
+    validate_station_location_mapping,
+)
 
-# Cấu hình encoding chuẩn UTF-8 trên Windows console
+# Configure UTF-8 on Windows console
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
 
-# Fallback nạp biến môi trường từ .env
+# Fallback load environment variables from .env
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except ImportError:
     env_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
     if os.path.exists(env_file):
-        with open(env_file, "r", encoding="utf-8") as f:
+        with open(env_file, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
                     k, v = line.split("=", 1)
                     os.environ.setdefault(k.strip(), v.strip().strip("'\""))
 
-# Cấu hình MinIO
+# MinIO configuration
 MINIO_HOST = os.getenv("MINIO_EXTERNAL_ENDPOINT", "localhost:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ROOT_USER", "minioadmin")
 MINIO_SECRET_KEY = os.getenv("MINIO_ROOT_PASSWORD", "minioadmin")
 MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
 BUCKET_BRONZE = os.getenv("MINIO_BUCKET_BRONZE", "bronze")
 
-# Endpoint dữ liệu thô hàng giờ của Meteostat
+# Meteostat bulk hourly data endpoint
 METEOSTAT_BULK_HOURLY_URL = "https://data.meteostat.net/hourly/{year}/{station}.csv.gz"
-
-# Danh mục các trạm khí tượng tham chiếu miền Bắc (docs/NAMING_CONVENTIONS.md Table 6)
-METEOSTAT_STATIONS = {
-    "48820": {"name": "Hà Nội (Láng)", "location_ref": "HAN", "latitude": 21.0167, "longitude": 105.8000},
-    "48825": {"name": "Hải Phòng (Cát Bi)", "location_ref": "HPH/PTO", "latitude": 20.9667, "longitude": 105.7667},
-    "48826": {"name": "Phù Liễn (Hải Phòng)", "location_ref": "TNG/HPH", "latitude": 20.8000, "longitude": 106.6333},
-    "48830": {"name": "Lạng Sơn", "location_ref": "HBI/NE", "latitude": 21.8333, "longitude": 106.7667},
-    "48840": {"name": "Thanh Hóa", "location_ref": "NBI", "latitude": 19.8000, "longitude": 105.7833},
-    "48806": {"name": "Sơn La", "location_ref": "NW", "latitude": 21.3333, "longitude": 103.9000},
-    "48808": {"name": "Cao Bằng", "location_ref": "NE", "latitude": 22.6667, "longitude": 106.2500},
-    "48803": {"name": "Lào Cai", "location_ref": "LCA", "latitude": 22.5000, "longitude": 103.9667},
-    "48816": {"name": "Tuyên Quang", "location_ref": "TUQ", "latitude": 21.8236, "longitude": 105.2153},
-    "48838": {"name": "Móng Cái", "location_ref": "HPH/NE", "latitude": 21.5167, "longitude": 107.9667},
-}
 
 
 def get_minio_client() -> Minio:
-    """Khởi tạo client kết nối MinIO"""
+    """Initialize MinIO client with fallback endpoint."""
     endpoint = MINIO_HOST
     try:
         client = Minio(
@@ -91,110 +85,177 @@ def get_minio_client() -> Minio:
         return client
 
 
-def fetch_meteostat_station_year(station_id: str, year: int, max_retries: int = 3) -> bytes | None:
-    """
-    Tải file nén .csv.gz từ kho lưu trữ Meteostat bulk và giải nén thành CSV thô.
-    Trả về None nếu kho dữ liệu không có bản ghi (HTTP 404).
+def fetch_meteostat_station_year(
+    station_id: str,
+    year: int,
+    max_retries: int = 3,
+    timeout: int = 20,
+) -> bytes | None:
+    """Download .csv.gz file from Meteostat bulk archive and decompress to raw CSV bytes.
+
+    Returns None if upstream archive reports 404 (station has no hourly records for that year).
+    Raises requests.RequestException or RuntimeError on connection, timeout, or server errors.
     """
     url = METEOSTAT_BULK_HOURLY_URL.format(year=year, station=station_id)
     delay = 2
 
     for attempt in range(1, max_retries + 1):
         try:
-            resp = requests.get(url, timeout=20)
+            resp = requests.get(url, timeout=timeout)
             if resp.status_code == 200:
-                # Giải nén gzip thành bytes thô của file CSV nguyên bản
-                csv_bytes = gzip.decompress(resp.content)
-                return csv_bytes
+                return gzip.decompress(resp.content)
             elif resp.status_code == 404:
-                # Trạm không có dữ liệu đo đạc theo giờ trong năm yêu cầu
+                # Allowed skip: station did not report hourly data for this year
                 return None
             elif resp.status_code == 429:
-                print(f"      [!] Bị giới hạn tần suất (Rate limit 429), chờ {delay}s...")
+                print(f"      [!] Rate limited (HTTP 429), retrying after {delay}s...")
+                time.sleep(delay)
+                delay *= 2
+            elif resp.status_code in (500, 502, 503, 504):
+                print(f"      [!] Server error HTTP {resp.status_code}, retrying after {delay}s...")
                 time.sleep(delay)
                 delay *= 2
             else:
-                print(f"      [!] Lỗi HTTP {resp.status_code}, chờ {delay}s...")
-                time.sleep(delay)
-                delay *= 2
-        except requests.RequestException as ex:
-            print(f"      [!] Ngoại lệ kết nối ({ex}), thử lại lần {attempt}/{max_retries} sau {delay}s...")
+                resp.raise_for_status()
+        except (requests.RequestException, gzip.BadGzipFile) as ex:
+            if attempt == max_retries:
+                raise RuntimeError(
+                    f"Failed to fetch Meteostat station {station_id} for year {year} "
+                    f"after {max_retries} attempts: {ex}"
+                ) from ex
+            print(
+                f"      [!] Fetch exception ({ex}), retrying {attempt}/{max_retries} after {delay}s..."
+            )
             time.sleep(delay)
             delay *= 2
 
-    raise RuntimeError(f"Không thể tải dữ liệu Meteostat sau {max_retries} lần thử cho trạm {station_id} năm {year}")
+    raise RuntimeError(f"Exhausted retries fetching Meteostat station {station_id} year {year}")
+
+
+def is_s3_not_found_error(err: S3Error) -> bool:
+    """Check if S3Error indicates a genuinely missing object rather than an authorization error."""
+    code = getattr(err, "code", None)
+    return code in ("NoSuchKey", "ResourceNotFound")
 
 
 def ingest_meteostat_data(
     start_year: int = 2016,
     end_year: int = 2025,
-    station_ids: list[str] = None,
+    station_ids: list[str] | None = None,
     overwrite: bool = False,
-):
-    """Quy trình thu thập dữ liệu Meteostat và tải lên tầng Bronze của MinIO"""
+) -> dict[str, Any]:
+    """Ingest Meteostat raw data into MinIO Bronze layer.
+
+    Aggregates successes, skips, 404s, and failures.
+    Raises RuntimeError if any requested task encounters a real failure.
+    """
     client = get_minio_client()
 
-    selected_stations = {}
+    selected_stations: dict[str, dict[str, Any]] = {}
     if station_ids:
         for sid in station_ids:
             sid_str = sid.strip()
-            if sid_str in METEOSTAT_STATIONS:
-                selected_stations[sid_str] = METEOSTAT_STATIONS[sid_str]
+            info = STATION_REGISTRY.get(sid_str)
+            if info:
+                selected_stations[sid_str] = info
             else:
-                # Hỗ trợ trạm WMO/ICAO ngoài danh mục mặc định
-                selected_stations[sid_str] = {"name": f"Station {sid_str}", "location_ref": "CUSTOM"}
+                is_valid, loc, msg = validate_station_location_mapping(sid_str)
+                selected_stations[sid_str] = {
+                    "station_name": f"Station {sid_str}",
+                    "location_code": loc,
+                    "status": "CUSTOM",
+                    "notes": msg,
+                }
     else:
-        selected_stations = METEOSTAT_STATIONS
+        # Default to canonical stations from station_config
+        selected_stations = get_canonical_stations()
 
     years = list(range(start_year, end_year + 1))
     total_tasks = len(selected_stations) * len(years)
 
     print("=" * 80)
-    print(" BẮT ĐẦU THU THẬP DỮ LIỆU TRẠM METEOSTAT -> MINIO BRONZE")
+    print(" STARTING METEOSTAT STATION INGESTION -> MINIO BRONZE")
     print("=" * 80)
-    print(f"[*] Phạm vi năm: {start_year} - {end_year} ({len(years)} năm)")
-    print(f"[*] Số trạm khí tượng: {len(selected_stations)}")
+    print(f"[*] Year range: {start_year} - {end_year} ({len(years)} years)")
+    print(f"[*] Stations count: {len(selected_stations)}")
     for sid, sinfo in selected_stations.items():
-        print(f"    - Trạm {sid}: {sinfo['name']} (Tham chiếu: {sinfo.get('location_ref', 'N/A')})")
-    print(f"[*] Tổng số tác vụ kiểm tra/tải: {total_tasks}")
+        print(
+            f"    - Station {sid}: {sinfo.get('station_name')} (Location: {sinfo.get('location_code')}, Status: {sinfo.get('status')})"
+        )
+    print(f"[*] Total tasks to evaluate: {total_tasks}")
     print("=" * 80)
 
     current_idx = 0
     success_count = 0
     skipped_count = 0
     not_found_count = 0
+    failures: list[dict[str, Any]] = []
 
     for sid, sinfo in selected_stations.items():
-        st_name = sinfo["name"]
-        print(f"\n>>> Đang xử lý trạm [{sid}] - {st_name}")
+        st_name = sinfo.get("station_name", f"Station {sid}")
+        print(f"\n>>> Processing station [{sid}] - {st_name}")
 
         for year in years:
             current_idx += 1
-            # Đường dẫn chuẩn hóa theo docs/NAMING_CONVENTIONS.md
-            object_path = f"meteostat/station_hourly/year={year}/meteostat_station_{sid}_hourly_{year}.csv"
+            object_path = (
+                f"meteostat/station_hourly/year={year}/meteostat_station_{sid}_hourly_{year}.csv"
+            )
 
-            # Kiểm tra xem file đã tồn tại trên MinIO chưa
+            # Check if object already exists in Bronze
             if not overwrite:
                 try:
                     stat = client.stat_object(BUCKET_BRONZE, object_path)
                     if stat.size > 200:
-                        print(f"  [{current_idx}/{total_tasks}] Năm {year}: {object_path} -> ĐÃ CÓ ({stat.size} bytes), bỏ qua.")
+                        print(
+                            f"  [{current_idx}/{total_tasks}] Year {year}: {object_path} -> EXISTS ({stat.size} bytes), skipping."
+                        )
                         skipped_count += 1
                         continue
-                except S3Error:
-                    pass
+                except S3Error as s3_err:
+                    if is_s3_not_found_error(s3_err):
+                        pass  # Object not found: proceed to download
+                    else:
+                        print(
+                            f"  [{current_idx}/{total_tasks}] Year {year}: MinIO stat_object error: {s3_err}"
+                        )
+                        failures.append(
+                            {
+                                "station_id": sid,
+                                "year": year,
+                                "stage": "stat_object",
+                                "error": str(s3_err),
+                            }
+                        )
+                        continue
+                except Exception as ex:
+                    print(
+                        f"  [{current_idx}/{total_tasks}] Year {year}: Unexpected error during stat_object: {ex}"
+                    )
+                    failures.append(
+                        {
+                            "station_id": sid,
+                            "year": year,
+                            "stage": "stat_object",
+                            "error": str(ex),
+                        }
+                    )
+                    continue
 
-            print(f"  [{current_idx}/{total_tasks}] Năm {year}: Đang kiểm tra/tải trạm {sid} ...", end="", flush=True)
+            print(
+                f"  [{current_idx}/{total_tasks}] Year {year}: Checking/fetching station {sid} ...",
+                end="",
+                flush=True,
+            )
 
             try:
                 csv_bytes = fetch_meteostat_station_year(station_id=sid, year=year)
 
                 if csv_bytes is None:
-                    print(" KHÔNG CÓ DỮ LIỆU (Trạm không có báo cáo giờ năm này - 404)")
+                    print(" NO DATA (HTTP 404 - no hourly reports for this station-year)")
                     not_found_count += 1
                     continue
 
-                # Lưu nguyên bản raw CSV và đính kèm metadata provenance vào object S3 (chỉ dùng US-ASCII cho HTTP headers)
+                # Preserve raw bytes and record provenance metadata in MinIO object
                 metadata = {
                     "source": "Meteostat Bulk Archive",
                     "station_id": sid,
@@ -212,38 +273,66 @@ def ingest_meteostat_data(
                 )
 
                 line_count = csv_bytes.count(b"\n")
-                print(f" XONG ({line_count:,} dòng CSV, {len(csv_bytes)/1024:.1f} KB)")
+                print(f" OK ({line_count:,} CSV lines, {len(csv_bytes) / 1024:.1f} KB)")
                 success_count += 1
-
-                # Nghỉ ngắn giữa các request để tuân thủ fair-use policy
                 time.sleep(0.5)
 
             except Exception as err:
-                print(f" THẤT BẠI: {err}")
+                print(f" FAILED: {err}")
+                failures.append(
+                    {
+                        "station_id": sid,
+                        "year": year,
+                        "stage": "fetch_or_upload",
+                        "error": str(err),
+                    }
+                )
 
     print("\n" + "=" * 80)
-    print(" KẾT QUẢ THU THẬP DỮ LIỆU METEOSTAT:")
-    print(f"  + Tải thành công mới    : {success_count} file")
-    print(f"  + Đã có sẵn (bỏ qua)    : {skipped_count} file")
-    print(f"  + Không có dữ liệu (404): {not_found_count} tác vụ")
-    print(f"  + Tổng số file Bronze   : {success_count + skipped_count}")
+    print(" METEOSTAT INGESTION SUMMARY:")
+    print(f"  + Newly ingested files      : {success_count}")
+    print(f"  + Already existing (skipped): {skipped_count}")
+    print(f"  + Upstream 404 (no data)    : {not_found_count}")
+    print(f"  + Total failures encountered: {len(failures)}")
     print("=" * 80)
+
+    summary = {
+        "success_count": success_count,
+        "skipped_count": skipped_count,
+        "not_found_count": not_found_count,
+        "failure_count": len(failures),
+        "failures": failures,
+    }
+
+    if failures:
+        print("\n[!] The batch encountered failures:")
+        for f in failures:
+            print(f"    - Station {f['station_id']} Year {f['year']} [{f['stage']}]: {f['error']}")
+        raise RuntimeError(
+            f"Meteostat ingestion completed with {len(failures)} failure(s). "
+            "Failing batch so Airflow can detect and retry."
+        )
+
+    return summary
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Thu thập dữ liệu trạm khí tượng Meteostat vào MinIO Bronze")
-    parser.add_argument("--start-year", type=int, default=2016, help="Năm bắt đầu (mặc định: 2016)")
-    parser.add_argument("--end-year", type=int, default=2025, help="Năm kết thúc (mặc định: 2025)")
+    parser = argparse.ArgumentParser(
+        description="Ingest Meteostat weather station data into MinIO Bronze layer"
+    )
+    parser.add_argument("--start-year", type=int, default=2016, help="Start year (default: 2016)")
+    parser.add_argument("--end-year", type=int, default=2025, help="End year (default: 2025)")
     parser.add_argument(
         "--stations",
         type=str,
         default=None,
-        help="Danh sách mã trạm phân tách bằng dấu phẩy (ví dụ: '48820,48825,48826'), hoặc để trống cho tất cả các trạm tham chiếu",
+        help="Comma-separated station IDs (e.g. '48820,48825'), or omit for default canonical stations",
     )
-    parser.add_argument("--overwrite", action="store_true", help="Ghi đè file nếu đã tồn tại trên MinIO")
+    parser.add_argument(
+        "--overwrite", action="store_true", help="Overwrite existing objects in Bronze"
+    )
 
     args = parser.parse_args()
-
     station_list = [s.strip() for s in args.stations.split(",")] if args.stations else None
 
     try:
@@ -253,9 +342,10 @@ if __name__ == "__main__":
             station_ids=station_list,
             overwrite=args.overwrite,
         )
+        sys.exit(0)
     except KeyboardInterrupt:
-        print("\n[!] Tiến trình bị dừng bởi người dùng.")
+        print("\n[!] Process interrupted by user.")
         sys.exit(0)
     except Exception as e:
-        print(f"\n[!] Lỗi: {e}")
+        print(f"\n[!] Error: {e}", file=sys.stderr)
         sys.exit(1)

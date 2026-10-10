@@ -6,9 +6,12 @@ This repository implements a northern Vietnam weather Data Lake, PostgreSQL DW, 
 
 Canonical timestamps are timezone-aware UTC. Observation grain is source × stable location × UTC hour. Project-specific definitions and their decision status belong in the documents below; skills describe reusable procedures.
 
+Write new or changed code and documentation in English, except `README.md`, which uses Vietnamese at the user's request. Code includes identifiers, comments, docstrings, logs, errors, and CLI help. Preserve source payloads, proper place names, workbook sheet names, stable IDs, and existing domain values. Language-only edits must not change contract semantics or database values. Preserve historical source documents unless their translation is requested.
+
 ## Read according to the task
 
 - Setup or architecture: `README.md`, `docs/architecture.md`, and relevant configuration.
+- Business scope or implementation planning: `docs/business-requirements.md`, `docs/implementation-roadmap.md`, the relevant task ID in the allocation workbook, and `docs/progress.md`.
 - ETL or data quality: `scripts/AGENTS.md`, `docs/data-contract.md`, `docs/NAMING_CONVENTIONS.md`.
 - Airflow: `dags/AGENTS.md` and the contracts of affected producers/consumers.
 - SQL or DW: `sql/AGENTS.md`, `docs/warehouse-schema.md`.
@@ -34,3 +37,5 @@ Select relevant skills under `.agents/skills/`: `weather-etl-airflow`, `weather-
 Use checks appropriate to the affected behavior. For Markdown/skill changes, validate links, frontmatter, metadata, and consistency without starting services. For Python, perform syntax checks and relevant behavioral tests. Test ETL/DW reruns on a small defined window when changing loading behavior; DAG syntax alone is not runtime validation.
 
 Report changed files, checks actually run, data scope, and unresolved limits. Never infer full backfill, DW population, or model accuracy from file existence, upload samples, or connection checks. Update relevant `docs/progress.md` evidence after substantive work; keep task ownership in the existing workbook.
+
+After every coding task, update `docs/progress.md` in the same turn before the final report, including partial results and failed checks. Record the workbook task ID, changed files/contracts, actual commands and results, runtime, synthetic versus real data scope, coverage/rerun evidence where relevant, and remaining limits. Use the entry template in `docs/implementation-roadmap.md`. Do not treat writing code or passing fixture tests as full task acceptance; workbook ownership/status must remain separate from technical evidence.

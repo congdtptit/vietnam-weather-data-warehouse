@@ -1,5 +1,9 @@
 x-airflow-common: &airflow-common
-  image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:2.9.3}
+  image: weather-airflow:2.9.3-python3.10
+  build:
+    context: .
+    dockerfile: Dockerfile
+    target: runtime
   environment: &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-airflow}
@@ -9,7 +13,6 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__CORE__ENABLE_XCOM_PICKLING: 'true'
     AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
-    _PIP_ADDITIONAL_REQUIREMENTS: "minio boto3 pandas pyarrow fastparquet psycopg2-binary requests scikit-learn"
     # Environment variables for DAGs and ETL scripts
     MINIO_ENDPOINT: minio:9000
     MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
