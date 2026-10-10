@@ -120,3 +120,33 @@ Giới hạn: test offline có 5 warnings — 4 deprecation warnings từ `sched
 - Validate pre-commit config, Python AST, hash trong hai lockfile, liên kết Markdown/code fences và `git diff --check` đạt. Không còn tham chiếu đang dùng tới script demo hoặc các skill đã xóa; tên cũ chỉ xuất hiện trong lịch sử/bằng chứng này.
 
 Phạm vi dữ liệu vẫn là fixture giả lập 3 giờ quanh 29/02–01/03/2024, 1 GeoJSON Point và 4 mẫu CART; DB/MinIO integration tạm, không tải lịch sử hoặc nạp DW phát triển. Chưa chạy workflow trên GitHub và chưa kiểm chứng arm64/Windows. Image runtime cũ không còn trong Docker cache ở đầu lượt này nên không có số đo dung lượng trước/sau để công bố phần trăm giảm; xác minh việc bỏ apt dựa trên Dockerfile/build/tests thực tế.
+
+## Kiểm tra lại — 10/10/2026
+
+Kiểm tra checkout tại commit `2f57bc1`, không sửa code hoặc schema. Docker Desktop ban đầu chưa chạy; đã mở ứng dụng và chạy lại bộ kiểm tra qua Docker.
+
+| Kiểm tra thực tế | Kết quả |
+| --- | --- |
+| `make check` | Exit 0: Ruff lint/format đạt cho 9 file Python; Compose development/test hợp lệ; build target test đạt |
+| Test offline, container `--network none` | **15 passed**, 6 integration deselected, 9,37 giây; Python 3.10.14, pytest 8.3.5 |
+| Test integration trên stack tạm | **6 passed**, 15 offline deselected, 5,35 giây; upload Bronze/rerun, health tasks, schema/seed rerun, uniqueness và FK đạt |
+| Cleanup | Make dọn 3 container và network test; kiểm tra theo label project `weather-tests` không còn container/network |
+| `make build` và container runtime không mạng | Build đạt, sử dụng cache; Python 3.10.14, Airflow 2.9.3, `pip check`: `No broken requirements found.`, có `/usr/bin/curl` |
+| Kiểm tra tĩnh | Pre-commit validate-config, Python AST, YAML workflow/hook, JSON fixture, `bash -n` initializer PostgreSQL, liên kết Markdown/code fences và `git diff --check` đạt |
+
+Test offline vẫn có **5 warnings**: 4 deprecation warnings từ `schedule_interval` và 1 warning `numpy.ndarray size changed` khi mở NetCDF; chưa xử lý hoặc chẩn đoán thêm. Các test đạt không xóa bỏ những hạn chế ingestion đã ghi ở trên.
+
+Phạm vi: fixture 3 giờ giả lập quanh 29/02–01/03/2024, 1 GeoJSON Point và 4 mẫu CART; API Open-Meteo được mock, PostgreSQL/MinIO integration dùng tmpfs riêng. Không khởi động stack phát triển, không tải dữ liệu thật, không nạp DW phát triển hoặc chạy DAG lịch sử. Chưa xác nhận toàn bộ stack phát triển chạy cùng nhau, pipeline đầu cuối, GitHub Actions, arm64/Windows hoặc độ chính xác dự báo; Silver/Gold, loader DW và artifact ML/BI còn thiếu. Log tạm: `/private/tmp/weather-recheck-20261010.log` và `/private/tmp/weather-runtime-recheck-20261010.log`.
+
+## Rà soát bất thường và thiếu hụt — 10/10/2026
+
+Đối chiếu code ingestion, Compose, DDL, test và hợp đồng domain; không thay đổi code/schema hoặc chạy dữ liệu thật.
+
+- **Ưu tiên cao — init Airflow có thể báo thành công khi migration lỗi:** chuỗi `airflow db migrate && ... && airflow users create ... || true && ...` trong Compose áp dụng `|| true` cho cả chuỗi trước nó. Mô phỏng cùng cấu trúc bằng `bash -c` với bước đầu `false` vẫn in thông báo thành công và exit 0. Đây là kiểm chứng ngữ nghĩa shell, chưa cố tình làm migration Airflow thật thất bại. Test hiện tại không chạy entrypoint này.
+- **Init MinIO chưa bảo đảm báo lỗi:** vòng `until mc alias set` không có timeout; các lệnh tạo bucket không có fail-fast và kết thúc bằng `exit 0`. Lỗi tạo bucket có thể bị che. Nhận định từ code, chưa gây lỗi runtime để kiểm chứng.
+- Các lỗi ingestion vẫn tồn tại: nuốt lỗi từng file, skip bằng kích thước, thiếu kiểm tra độ dài/schema/coverage của response, thay đổi raw payload Bronze. Bộ test hiện tại chưa bảo đảm batch thất bại được DAG ghi nhận; test skip đang xác nhận chính hành vi size-rule cũ.
+- Cấu hình tùy chỉnh chưa nhất quán: initializer cố định `weather_dwh`, health task cố định tên 3 bucket; MinIO runtime dùng tag `latest` trong khi integration dùng digest. Integration chưa xác minh toàn bộ entrypoint và image của Compose phát triển.
+- DW chưa seed DimDate hoặc có loader/OLAP; unique observation dùng date/time keys với calendar basis chưa chốt; prediction chưa có khóa rerun và origin/target window UTC. Hợp đồng nhãn mưa, coverage, nguồn fallback và chọn trạm vẫn là các quyết định mở.
+- Chưa có collector ERA5/trạm/địa giới thật, ETL Silver/Gold, feature/label pipeline, artifact CART hoặc Power BI. 21 test đạt và 5 warnings đã ghi ở trên chỉ bao phủ phần triển khai hiện có.
+
+Thứ tự đề xuất: sửa failure status của init/ingestion và bổ sung test lỗi → chốt hợp đồng còn mở → hoàn thiện một lát cắt Open-Meteo/Bronze/Silver/Gold/DW trên cửa sổ nhỏ, kiểm tra rerun → mở rộng đa nguồn, OLAP/BI và CART. Đây là đề xuất ưu tiên kỹ thuật, không thay đổi phân công trong workbook.
