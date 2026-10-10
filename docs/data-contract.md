@@ -30,18 +30,21 @@ The following types are proposed Silver exchange types; they do not change Postg
 | --- | --- | --- |
 | `source_name` | non-null string | Source identity; preserve separate sources |
 | `location_code` | non-null string | Stable research point |
+| `station_id` | nullable string | Source station identifier (e.g. WMO station ID for Meteostat/NOAA) |
 | `timestamp_utc` | non-null UTC timestamp | Verified representative timestamp |
 | `timestamp_local` | derived timestamp | Vietnam local time |
 | `temperature_c` | nullable float | °C |
 | `humidity_percent` | nullable float | Relative humidity, % |
-| `pressure_hpa` | nullable float | hPa; document surface/sea-level pressure before mapping |
+| `pressure_hpa` | nullable float | Atmospheric pressure in hPa |
+| `pressure_type` | non-null string | Explicit pressure type (`surface` for Open-Meteo, `sea_level` for Meteostat) |
 | `precipitation_mm` | nullable float | Total precipitation over one hourly interval, not a multi-hour accumulation |
 | `wind_speed_ms` | nullable float | m/s; measurement height depends on the product |
 | `wind_direction_deg` | nullable float | Degrees under the source's meteorological convention |
 | `cloud_cover_percent` | nullable float | % |
 | `solar_radiation_wm2` | nullable float | W/m²; agree radiation type and interval before mapping |
+| `observation_type` | nullable string | Provenance indicator (`station_reported`, `model_reanalysis`) |
 
-Do not merge different variables such as direct-normal irradiance and shortwave radiation merely because units match. Surface and sea-level pressure are not equivalent. Retain extra variables in Bronze or introduce versioned schema additions when needed.
+Do not merge different variables such as direct-normal irradiance and shortwave radiation merely because units match. Surface and sea-level pressure are not equivalent: Open-Meteo produces surface pressure while Meteostat station archive provides sea-level pressure (`pressure_type` prevents downstream conflation). Retain extra variables in Bronze or introduce versioned schema additions when needed.
 
 ## Layers and provenance
 

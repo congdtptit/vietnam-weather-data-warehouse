@@ -179,3 +179,24 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
 - Consolidated the verified base status, missing business components, document/source links, setup requirements, Make commands, development endpoints, repository layout, and task-based AI workflow. Removed the outdated first-repository Git initialization instructions and added both new business documents to the directory overview.
 - Checks: a Python static check validated 18 local links, balanced code fences, all referenced Make targets, Compose services, DAG identifiers, and inclusion of all nine domain documents. No frontmatter was introduced. `git diff --check` passed.
 - Scope: documentation only; no services, test suites, data processing, schema changes, source artifact edits, or workbook status changes. Previously recorded runtime test results were cited as historical evidence, not rerun. Changes remain local and uncommitted.
+
+## Meteostat and Silver ETL Review Remediations — 2026-10-11
+
+- Related work: workbook IDs 9 (`Meteostat/NOAA → Bronze`) and 10 (`API/stations → Silver`) in `Theo dõi công việc!A13:O14`, `docs/data-contract.md` draft v0.1, and `docs/NAMING_CONVENTIONS.md` Table 6.
+- Objective/scope: Resolve code review items on Meteostat ingestion, Open-Meteo & Meteostat Silver transformations, deduplication, grid coverage, range validation, station synchronization, pressure type provenance, failure status reporting, and Ruff formatting.
+- Disentangling unverified claims: Earlier unverified notes claiming "960 files / 701,376 records / 100% đủ giờ" and "518 files / 375,188 records" are separated from verified evidence. That coverage metric was flawed (inferred from data min/max timestamps rather than research scope), and no ten-year production download was authorized or executed in this turn.
+- Changes:
+  - Authored `scripts/station_config.py`: Shared station registry across ingest and transform, validating the 8 canonical research locations from Table 6 (`HAN`, `PTO`, `TNG`, `TUQ`, `LCA`, `HBI`, `HPH`, `NBI`). Unmapped regional stations (`48806` Sơn La, `48808` Cao Bằng) are marked unmapped pending team decision, blocking invalid publication or `UNKNOWN` output.
+  - Authored `scripts/quality_checks.py`: Chronological UTC hourly grid coverage calculation over explicit `[start, end)` windows, handling leap years (8,784h in 2024 vs 8,760h in 2023) and empty DataFrames; meteorological range validation setting negative precipitation and out-of-range humidity/cloud/wind to `NaN` (no clipping to valid values); order-invariant deduplication separating identical duplicates (deterministic collapse) from conflicting duplicates (quarantine).
+  - Updated `scripts/ingest_meteostat.py`: Unified station configuration, distinct HTTP 404 (allowed skip: no reporting) vs S3/network/timeout failures, proper `is_s3_not_found_error()` (ignoring `NoSuchKey` but failing on `AccessDenied`), batch failure aggregation, and exit code 1 on failure for Airflow detection.
+  - Updated `scripts/transform_meteostat_to_silver.py`: Unified station config, grain dedup with conflict quarantine, range validation without clipping, explicit sea-level pressure type (`pressure_type = "sea_level"`), provenance retention (`station_id`, `observation_type`), grid coverage over `[start, end)`, error reporting and exit code 1 on failures.
+  - Updated `scripts/transform_open_meteo_to_silver.py`: Range validation without clipping, explicit surface pressure type (`pressure_type = "surface"`), conflict quarantine on grain, grid coverage over `[start, end)`, error reporting and exit code 1 on failures.
+  - Updated `docs/data-contract.md`: Standard observation columns table updated to record `pressure_type`, `station_id`, and `observation_type`.
+  - Authored `tests/test_silver_transformations.py`: 20 unit and small slice tests covering all 7 review scenarios.
+- Checks:
+  - `python -m ruff check scripts/ tests/`: Passed with 0 errors.
+  - `python -m ruff format --check scripts/ tests/`: Passed with 14 files formatted.
+  - `WEATHER_TESTING=1 pytest tests/test_ingestion.py tests/test_silver_transformations.py`: **27 passed in 1.20s** (7 ingestion + 20 silver transformation / quality / slice tests).
+  - Small-scope mock execution for both Open-Meteo and Meteostat transformers verified Parquet serialization and PyArrow deserialization round-trip.
+- Data scope: Small synthetic fixtures and mocks (3 synthetic hours across 2024-02-29/2024-03-01 boundary, mock CSV/JSON payloads, PyArrow table round-trip). No live external weather API calls, no MinIO production writes, and no full 10-year historical backfill.
+- Limits: Full historical backfill, DW loading, and real MinIO cluster operations remain unexecuted and unverified.
