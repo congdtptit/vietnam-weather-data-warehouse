@@ -1,237 +1,185 @@
-# HỆ THỐNG KHO DỮ LIỆU KHÍ TƯỢNG ĐA NGUỒN MIỀN BẮC VIỆT NAM
+# Kho dữ liệu khí tượng đa nguồn miền Bắc Việt Nam
 
-> **Học phần**: Kho dữ liệu và Kỹ thuật khai phá dữ liệu  
-> **Đề tài**: *Xây dựng kho dữ liệu khí tượng đa nguồn phục vụ phân tích xu hướng và dự báo khả năng mưa tại miền Bắc Việt Nam*  
-> **Công nghệ chủ đạo**: MinIO (Data Lake) | Apache Airflow (Orchestration) | PostgreSQL (Data Warehouse Star Schema) | Scikit-learn (Cây quyết định CART) | Power BI (OLAP/Dashboard)
+Dự án học phần **Kho dữ liệu và Kỹ thuật khai phá dữ liệu**, hướng tới xây dựng kho dữ liệu khí tượng đa nguồn để phân tích xu hướng và dự báo khả năng mưa tại miền Bắc Việt Nam.
 
----
+Công nghệ chính: **MinIO · Apache Airflow · PostgreSQL · scikit-learn (CART) · Power BI**.
 
-## TÀI LIỆU VÀ TRẠNG THÁI TRIỂN KHAI
+README này dùng tiếng Việt theo yêu cầu của dự án. Code và tài liệu kỹ thuật/nghiệp vụ trong `docs/` dùng tiếng Anh.
 
-Repository hiện có cấu hình hạ tầng, script/DAG Open-Meteo → Bronze, DDL khởi tạo và bộ pytest với fixture giả lập. Kiến trúc bên dưới là **mục tiêu**; chưa có bằng chứng trong lượt kiểm kê cho pipeline Silver/Gold, loader DW, OLAP, CART hoặc dashboard hoàn chỉnh. Xem [tiến độ và hạn chế](docs/progress.md).
+## Trạng thái hiện tại
+
+Repository đang ở giai đoạn **xây dựng nền tảng kỹ thuật**. Đã có:
+
+- Docker Compose cho MinIO, PostgreSQL và Airflow; Dockerfile Airflow 2.9.3/Python 3.10 với dependency được khóa phiên bản và checksum.
+- Khởi tạo bucket Bronze/Silver/Gold, DDL Star Schema và dữ liệu dimension mẫu.
+- Script thu thập Open-Meteo vào Bronze và DAG chạy thủ công theo từng tập dữ liệu.
+- Ruff, pre-commit, Makefile, pytest và cấu hình GitHub Actions.
+- Tài liệu nghiệp vụ, lộ trình triển khai theo 40 task trong bảng phân công và nhật ký tiến độ.
+
+Lần kiểm tra ngày **2026-10-10** ghi nhận `make check` và `make build` thành công: **15 test offline + 6 test integration** đạt. Phạm vi dữ liệu gồm ba giờ thời tiết giả lập, một GeoJSON Point và bốn mẫu kiểm tra thư viện CART. Còn năm cảnh báo được ghi trong [nhật ký tiến độ](docs/progress.md).
+
+**Chưa có pipeline nghiệp vụ hoàn chỉnh**: collector ERA5/trạm/địa giới thực, xử lý Silver/Gold, loader DW, OLAP, mô hình CART và dashboard Power BI còn thiếu. Kết quả test hiện tại chưa chứng minh backfill lịch sử, dữ liệu DW thực, độ chính xác dự báo hoặc toàn bộ stack phát triển hoạt động từ đầu đến cuối. Việc hoàn thành nền tảng kỹ thuật cũng chưa đồng nghĩa tất cả task tuần 1 đã được nghiệm thu.
+
+## Tài liệu và phân công
 
 | Tài liệu | Nội dung |
 | --- | --- |
-| [AGENTS.md](AGENTS.md) | Quy tắc cho AI và đọc tài liệu theo nhiệm vụ |
-| [Kiến trúc](docs/architecture.md) | Luồng mục tiêu và runtime đang cấu hình |
-| [Môi trường phát triển](docs/development.md) | Docker image, Python và dependency đã khóa |
-| [Data contract](docs/data-contract.md) | UTC, cột, đơn vị, thiếu/trùng và quyết định còn mở |
-| [Warehouse schema](docs/warehouse-schema.md) | DDL hiện có, grain, khóa, calendar và OLAP |
-| [Rain label](docs/rain-label.md) | Nhãn 24h, chống leakage và validation/test |
+| [Đề tài gốc](<đề tài.pdf>) | Mục tiêu, phạm vi và sản phẩm của đề tài |
+| [Bảng phân công](Phan_cong_cong_viec_DW_khi_tuong.xlsx) | Chủ sở hữu, lịch và trạng thái quản lý của 40 task |
+| [Business requirements](docs/business-requirements.md) | Yêu cầu nghiệp vụ, luồng xử lý, tiêu chí nghiệm thu và quyết định còn mở |
+| [Implementation roadmap](docs/implementation-roadmap.md) | Task ID, phụ thuộc và cách chia nhỏ công việc cho AI |
+| [Architecture](docs/architecture.md) | Kiến trúc mục tiêu và thành phần hiện có |
+| [Development](docs/development.md) | Setup, runtime, dependency, test và CI |
+| [Data contract](docs/data-contract.md) | UTC, grain, cột, đơn vị và xử lý dữ liệu |
+| [Warehouse schema](docs/warehouse-schema.md) | DDL, khóa, quan hệ, calendar và OLAP |
+| [Rain label](docs/rain-label.md) | RainNext24h, chống leakage và validation/test |
 | [Naming conventions](docs/NAMING_CONVENTIONS.md) | Bucket, object key và phân vùng |
+| [Progress](docs/progress.md) | Bằng chứng đã thực hiện, kết quả kiểm tra và hạn chế |
+| [AGENTS.md](AGENTS.md) | Hướng dẫn làm việc trong repository cho AI |
 
-Các skill trong `.agents/skills/` hướng dẫn quy trình chuyên môn; định nghĩa riêng của dự án nằm trong tài liệu domain ở trên. Hướng dẫn AI/skill viết bằng tiếng Anh; tài liệu nhóm giữ tiếng Việt.
+Đề tài gốc xác định mục tiêu; bảng phân công quản lý người phụ trách và trạng thái nhóm. Tài liệu trong `docs/` ghi hợp đồng triển khai và bằng chứng kỹ thuật. Các đề xuất chưa chốt được ghi riêng, không tự động trở thành yêu cầu đã duyệt.
 
-Thành viên mới: chạy `make setup`, `make hooks`, `make check` sau khi clone. Ruff/pre-commit kiểm tra Python; pytest dùng container và fixture riêng. GitHub Actions chạy cùng kiểm tra trên pull request. Chi tiết và điều kiện môi trường ở [hướng dẫn phát triển](docs/development.md).
+## Kiến trúc mục tiêu
 
-## 1. TỔNG QUAN KIẾN TRÚC HỆ THỐNG
-
-Dự án hướng tới pipeline hoàn chỉnh từ thu thập, lưu trữ, xử lý, nạp kho dữ liệu đến khai phá dữ liệu dự báo mưa:
-
-```
-[Nguồn Dữ Liệu]
- ├── Open-Meteo REST API (JSON)
- ├── ERA5 / ERA5-Land (NetCDF)
- ├── Meteostat / NOAA (CSV/Text)
- └── Dữ liệu địa giới Việt Nam (GeoJSON)
-       │
-       ▼
-[DATA LAKE - MinIO]
- ├── Bronze  (Dữ liệu thô nguyên bản)
- ├── Silver  (Dữ liệu làm sạch, chuẩn UTC, có giờ Việt Nam suy ra, Parquet)
- └── Gold    (Dữ liệu tổng hợp, Fact/Dimensions, Feature sets cho ML)
-       │
-       ▼ [Apache Airflow ETL Pipeline]
-[DATA WAREHOUSE - PostgreSQL]
- ├── FactWeatherObservation (Grain: 1 nguồn × 1 vị trí × 1 giờ)
- ├── FactWeatherPrediction (Kết quả dự báo mô hình ML)
- └── Dimensions (DimDate, DimTime, DimLocation, DimSource, DimStation)
-       │
-       ├──► [KHAI PHÁ DỮ LIỆU] Thuật toán CART Decision Tree (Dự báo RainNext24h: Yes/No)
-       └──► [OLAP & BI] Power BI Dashboard (Roll-up, Drill-down, Slice, Dice, Bản đồ)
+```mermaid
+flowchart TD
+    SRC[Open-Meteo / ERA5 / Meteostat hoặc NOAA / GeoJSON] --> B[MinIO Bronze: dữ liệu nguồn]
+    B --> S[Silver: chuẩn hóa UTC, đơn vị, khóa và chất lượng]
+    S --> G[Gold: dữ liệu quan sát và tập đặc trưng]
+    G --> DW[PostgreSQL: dimensions và observation fact]
+    DW --> BI[Power BI: phân tích lịch sử và OLAP]
+    G --> ML[CART: RainNext24h]
+    ML --> P[DW: prediction fact và DimModel]
+    P --> BI
+    AF[Airflow: điều phối và kiểm tra] -.-> S
+    AF -.-> G
+    AF -.-> DW
+    AF -.-> ML
 ```
 
----
+Đây là kiến trúc **mục tiêu**. Timestamp chuẩn là UTC có timezone; grain quan sát là **nguồn × vị trí ổn định × giờ UTC**. Dữ liệu từng nguồn được giữ riêng. Tập đặc trưng ML có thể có grain khác nhưng không làm thay đổi grain của fact quan sát.
 
-## 2. HƯỚNG DẪN KHỞI TẠO GIT REPOSITORY (DÀNH CHO NGƯỜI DÙNG)
+## Setup và kiểm tra nền tảng
 
-Do bạn đã lưu ý sẽ **tự tạo repo Git**, cấu trúc mã nguồn đã được chuẩn bị đầy đủ sẵn sàng với file `.gitignore` và `.env` chuẩn. Bạn chỉ cần thực hiện các lệnh sau trên terminal tại thư mục dự án:
+Cần Git, Docker Desktop/Engine với Compose v2, Python **≥ 3.10** cho công cụ cục bộ và GNU Make/bash. Trên Windows, dùng WSL2 có Docker integration. Runtime tham chiếu của ứng dụng là container Linux với **Airflow 2.9.3/Python 3.10**.
 
-```powershell
-# 1. Khởi tạo Git repo
-git init
+Sau khi clone và mở thư mục repository, bật Docker rồi chạy:
 
-# 2. Thêm tất cả các file vào staging
-git add .
-
-# 3. Tạo commit đầu tiên
-git commit -m "feat: setup Docker Compose stack (MinIO, Airflow, PostgreSQL), Star Schema DWH and MinIO Medallion buckets"
-
-# 4. (Tùy chọn) Liên kết với remote repository của bạn trên GitHub / GitLab
-# git remote add origin https://github.com/<your-username>/<your-repo-name>.git
-# git branch -M main
-# git push -u origin main
+```bash
+make setup
+make hooks
+make check
 ```
 
----
+- `make setup`: tạo `.venv` và cài công cụ từ lockfile có checksum.
+- `make hooks`: cài pre-commit cho checkout hiện tại.
+- `make check`: kiểm tra Ruff, cấu hình Compose, test offline và integration.
 
-## 3. CÁC THÀNH PHẦN STACK (DOCKER COMPOSE)
+Setup/build lần đầu cần mạng để tải package và image. Test offline chạy trong container với `--network none`. Integration dùng PostgreSQL/MinIO tạm, không dùng volume phát triển và tự dọn sau khi chạy. Xem [hướng dẫn phát triển](docs/development.md) để biết cách cập nhật lockfile và các giới hạn nền tảng đã kiểm tra.
 
-| Dịch vụ | Container Name | Cổng ngoài (Host) | Cổng trong (Container) | Tài khoản / Thông tin mặc định |
-|---|---|:---:|:---:|---|
-| **MinIO Console** | `weather-minio` | `9001` | `9001` | User: `minioadmin` / Pass: `minioadmin` |
-| **MinIO S3 API** | `weather-minio` | `9000` | `9000` | Endpoint: `http://localhost:9000` |
-| **MinIO Init** | `weather-minio-init` | - | - | Tự động tạo 3 bucket: `bronze`, `silver`, `gold` |
-| **Airflow Webserver** | `weather-airflow-webserver` | `8080` | `8080` | User: `admin` / Pass: `admin` |
-| **Airflow Scheduler** | `weather-airflow-scheduler` | - | - | Chạy ngầm điều phối các DAGs |
-| **Airflow Init** | `weather-airflow-init` | - | - | Khởi tạo schema và tài khoản admin |
-| **PostgreSQL DWH** | `weather-postgres` | `5434`* | `5432` | User: `postgres` / Pass: `postgres`<br>DB: `weather_dwh` & `airflow` |
+## Khởi chạy stack phát triển
 
-*\*Lưu ý cổng PostgreSQL*: Mặc định ánh xạ cổng host **5434** (thay vì 5432) để tránh xung đột nếu máy bạn đang có một container PostgreSQL khác đang chạy cổng 5432. Bạn có thể tùy chỉnh lại trong file `.env` nếu muốn.
+Nếu chưa có `.env`, sao chép `.env.example` thành `.env` và điều chỉnh cấu hình cục bộ. Giữ nguyên `.env` đã thiết lập. Sau đó chạy:
 
----
-
-## 4. HƯỚNG DẪN KHỞI CHẠY HỆ THỐNG
-
-### Bước 1: Chuẩn bị cấu hình và khởi động stack
-
-Nếu chưa có `.env`, sao chép `.env.example` thành `.env` và điều chỉnh cấu hình cục bộ. Giữ `.env` hiện có nếu đã thiết lập.
-
-Compose build Dockerfile Airflow 2.9.3/Python 3.10, cài thư viện từ lockfile có checksum. Mở Docker Desktop trước khi chạy; xem [môi trường phát triển](docs/development.md) để kiểm tra image và cập nhật dependency.
-
-```powershell
-# Build image dùng chung cho các service Airflow
-docker compose build airflow-webserver
-# Khởi động ở chế độ background (detached)
+```bash
+docker compose config --quiet
+make build
 docker compose up -d --no-build
-```
-
-Container `weather-minio-init` được cấu hình tạo 3 bucket: `bronze`, `silver`, `gold`. Xác minh trạng thái sau khởi động; bucket tồn tại chưa chứng minh có dữ liệu thật.
-
-### Bước 2: Kiểm tra trạng thái các container
-
-```powershell
 docker compose ps
 ```
 
-### Bước 3: Truy cập các giao diện quản trị
-1. **MinIO Web Console**: Truy cập [http://localhost:9001](http://localhost:9001)  
-   - Đăng nhập: `minioadmin` / `minioadmin`  
-   - Bạn sẽ thấy 3 bucket: `bronze`, `silver`, `gold`.
-2. **Apache Airflow UI**: Truy cập [http://localhost:8080](http://localhost:8080)  
-   - Đăng nhập: `admin` / `admin`  
-   - Bật DAG mẫu `weather_system_healthcheck_dag` để kiểm tra kết nối tự động.
-3. **PostgreSQL Data Warehouse**: Kết nối qua DBeaver / Navicat / pgAdmin / Power BI:
-   - Host: `localhost`
-   - Port: `5434`
-   - Database: `weather_dwh`
-   - User: `postgres`
-   - Password: `postgres`
+Lệnh `up` chạy các service khởi tạo database/bucket theo cấu hình. Bucket hoặc bảng tồn tại chưa chứng minh đã có dữ liệu thời tiết thực. PostgreSQL initializer hiện dùng tên cố định `weather_dwh`; thay `DWH_DB` riêng trong `.env` chưa đủ để hỗ trợ tên database khác.
 
----
+| Dịch vụ | Địa chỉ/cổng mặc định trên máy | Tài khoản mặc định |
+| --- | --- | --- |
+| MinIO Console | [localhost:9001](http://localhost:9001) | `minioadmin` / `minioadmin` |
+| MinIO S3 API | `http://localhost:9000` | Cùng thông tin MinIO |
+| Airflow UI | [localhost:8080](http://localhost:8080) | `admin` / `admin` |
+| PostgreSQL | `localhost:5434` | `postgres` / `postgres` |
 
-## 5. TẠO VÀ KIỂM THỬ BUCKET TRÊN MINIO (TASK 2)
+PostgreSQL chứa database `airflow` cho metadata và `weather_dwh` cho DW. Bên trong Docker, endpoint là `postgres:5432` và `minio:9000`. Cổng host có thể điều chỉnh trong `.env`; PostgreSQL mặc định dùng 5434 để giảm xung đột với dịch vụ đang dùng 5432.
 
-### 5.1. Tự động hóa qua Script Python
-Bên cạnh container `minio-init`, bạn có thể chạy trực tiếp script Python để khởi tạo bucket và các thư mục phân vùng mẫu:
+DAG `weather_system_healthcheck_dag` kiểm tra kết nối; DAG `open_meteo_ingest_to_bronze_dag` thu thập lịch sử khi được kích hoạt thủ công. Chạy ingestion lịch sử là một bước riêng có phạm vi tải dữ liệu cần được xác định, không phải điều kiện để kiểm tra setup.
 
-```powershell
-# Chạy script khởi tạo bucket và cây thư mục phân vùng
-python scripts/init_minio.py
+Các hạn chế về báo lỗi của service init và ingestion được ghi trong [progress](docs/progress.md). Cần xem trạng thái/log thực tế khi khởi động; thông báo init thành công chưa đủ để kết luận mọi bước đã chạy đúng.
+
+## Lệnh thường dùng
+
+| Lệnh | Mục đích |
+| --- | --- |
+| `make help` | Liệt kê lệnh hỗ trợ |
+| `make lint` | Kiểm tra Ruff lint và formatting |
+| `make format` | Áp dụng lint fix và format Python |
+| `make precommit` | Chạy hook trên file đã được Git theo dõi |
+| `make test` | Build test image và chạy test offline |
+| `make test-integration` | Chạy test với PostgreSQL/MinIO tạm |
+| `make check` | Chạy lint, kiểm tra Compose và cả hai bộ test |
+| `make build` | Build image runtime Airflow |
+| `make up` | Build và khởi chạy stack phát triển |
+| `make down` | Dừng stack, giữ volume dữ liệu |
+
+Xem log khi cần:
+
+```bash
+docker compose logs -f minio
+docker compose logs -f airflow-webserver
+docker compose logs -f postgres
 ```
 
-### 5.2. Kiểm thử upload trong môi trường riêng
-Pytest kiểm tra upload/rerun Bronze với fixture giả lập trên MinIO tạm; không ghi vào các bucket của hệ thống phát triển và không chứng minh ETL Silver/Gold thực.
+`docker compose down -v` xóa volume dữ liệu. Không dùng lệnh này để cập nhật image hoặc kiểm tra tài liệu.
 
-```powershell
-make test-integration
-```
+## Cấu trúc repository
 
-### 5.3. Tóm tắt Quy ước đặt tên file (Naming Convention)
-Chi tiết đầy đủ xem tại file tài liệu: **[docs/NAMING_CONVENTIONS.md](docs/NAMING_CONVENTIONS.md)**.
-
-- **Tầng Bronze (Raw)**:
-  * Open-Meteo: `bronze/open_meteo/hourly/year=YYYY/month=MM/open_meteo_<location>_hourly_<start>_<end>.json`
-  * ERA5: `bronze/era5/reanalysis/year=YYYY/month=MM/era5_north_vietnam_hourly_<YYYYMM>.nc`
-  * Meteostat: `bronze/meteostat/station_hourly/year=YYYY/meteostat_station_<id>_hourly_<YYYY>.csv`
-  * Địa giới không gian: `bronze/spatial/boundaries/vietnam_northern_provinces_v1.geojson`
-- **Tầng Silver (Cleaned - Parquet)**:
-  * Thời tiết theo giờ: `silver/weather_hourly/year=YYYY/month=MM/weather_hourly_<location>_<YYYYMM>.parquet`
-  * Danh mục trạm đo: `silver/stations/stations_metadata_cleaned.parquet`
-- **Tầng Gold (Serving & ML - Parquet)**:
-  * Bảng Fact: `gold/fact_weather_observation/year=YYYY/month=MM/fact_weather_observation_<YYYYMM>.parquet`
-  * Dataset huấn luyện ML (CART): `gold/ml_features/cart_rain_prediction_<split>_<version>.parquet`
-  * Kết quả dự báo: `gold/predictions/year=YYYY/month=MM/rain_predictions_cart_<YYYYMMDD>.parquet`
-
----
-
-## 6. CẤU TRÚC THƯ MỤC DỰ ÁN
-
-```
+```text
 Test_DL_weather/
-├── .env                          # File cấu hình biến môi trường cục bộ
-├── .env.example                  # Template mẫu biến môi trường
-├── .gitignore                    # Bỏ qua log, data lớn, cache, secret keys
-├── .pre-commit-config.yaml        # Ruff hooks trước commit
-├── .github/workflows/ci.yml       # Kiểm tra pull request và push main
-├── Makefile                      # Setup, lint, test và quản lý stack
-├── pyproject.toml                # Cấu hình Ruff/pytest
-├── Dockerfile                    # Airflow 2.9.3/Python 3.10, được Compose dùng để build
-├── docker-compose.yml            # Khởi chạy MinIO, Airflow, PostgreSQL
-├── docker-compose.test.yml       # PostgreSQL/MinIO test riêng, lưu trữ tạm
-├── requirements.in               # Dependency trực tiếp, đầu vào resolver
-├── requirements.txt              # Lock dependency Python kèm SHA-256
-├── requirements-dev.in           # Công cụ dev/test trực tiếp
-├── requirements-dev.txt          # Lock công cụ dev/test kèm SHA-256
-├── constraints/                  # Constraints chính thức của Airflow 2.9.3/Python 3.10
-├── README.md                     # Tài liệu hướng dẫn dự án
-├── AGENTS.md                     # Quy tắc AI và định tuyến tài liệu
-├── .agents/skills/               # Weather skills và các skill đã cài khác
-├── đề tài.pdf                     # Tài liệu mô tả đề tài gốc
-├── dags/                         # Chứa các DAG của Airflow
-│   ├── AGENTS.md                 # Quy tắc Airflow
-│   ├── weather_pipeline_health_dag.py # DAG kiểm tra kết nối MinIO và Postgres DWH
-│   └── dag_ingest_open_meteo.py   # DAG lịch sử thủ công theo split
-├── docs/                         # Tài liệu quy chuẩn kỹ thuật
-│   ├── NAMING_CONVENTIONS.md     # Quy ước bucket và object key
-│   ├── architecture.md          # Kiến trúc và runtime
-│   ├── data-contract.md         # Hợp đồng Silver/Gold
-│   ├── warehouse-schema.md      # Grain, khóa và OLAP
-│   ├── rain-label.md            # Nhãn và đánh giá
-│   ├── development.md           # Onboarding, Makefile, test và CI
-│   └── progress.md              # Bằng chứng tiến độ và hạn chế
-├── tests/                        # Test offline/integration và fixture giả lập
-├── scripts/                      # Các script tiện ích và ETL độc lập
-│   ├── AGENTS.md                 # Quy tắc ETL
-│   ├── init_minio.py             # Khởi tạo bucket và folder placeholder trên MinIO
-│   └── ingest_open_meteo.py      # Thu thập lịch sử theo năm vào Bronze
-├── sql/                          # Scripts khởi tạo cơ sở dữ liệu
-│   ├── AGENTS.md                 # Quy tắc DW và migration
-│   ├── 01_init_postgres.sh       # Script entrypoint cho PostgreSQL container
-│   └── init_dwh_schema.sql       # DDL tạo Star Schema và nạp dữ liệu Dim mẫu
-├── plugins/                      # Custom Airflow plugins (nếu có)
-├── config/                       # Airflow config bổ sung
-└── data/                         # Thư mục dữ liệu cục bộ tạm thời (đã gitignore)
-    ├── bronze/
-    ├── silver/
-    └── gold/
+├── README.md                      # Giới thiệu và setup bằng tiếng Việt
+├── AGENTS.md                      # Hướng dẫn cho AI
+├── .env.example                   # Cấu hình môi trường mẫu
+├── .github/workflows/ci.yml        # Kiểm tra PR và push main
+├── .pre-commit-config.yaml         # Ruff hooks
+├── Makefile                       # Setup, kiểm tra và quản lý stack
+├── pyproject.toml                 # Cấu hình Ruff/pytest
+├── Dockerfile                     # Runtime và test image
+├── docker-compose.yml             # Stack phát triển
+├── docker-compose.test.yml        # Stack integration tạm
+├── requirements.in / .txt          # Dependency runtime và lockfile
+├── requirements-dev.in / .txt      # Công cụ phát triển và lockfile
+├── constraints/                   # Constraints Airflow/Python
+├── .agents/skills/                # Quy trình tái sử dụng
+├── docs/                          # Tài liệu bằng tiếng Anh
+│   ├── business-requirements.md    # Yêu cầu nghiệp vụ
+│   ├── implementation-roadmap.md   # Lộ trình 40 task
+│   ├── architecture.md            # Kiến trúc
+│   ├── development.md             # Môi trường và kiểm tra
+│   ├── data-contract.md           # Hợp đồng dữ liệu
+│   ├── warehouse-schema.md        # DW và OLAP
+│   ├── rain-label.md              # Nhãn mưa và đánh giá
+│   ├── NAMING_CONVENTIONS.md      # Quy ước đặt tên
+│   └── progress.md                # Bằng chứng tiến độ
+├── dags/                          # DAG và hướng dẫn Airflow
+│   ├── weather_pipeline_health_dag.py
+│   └── dag_ingest_open_meteo.py
+├── scripts/                       # Script và hướng dẫn ETL
+│   ├── init_minio.py
+│   └── ingest_open_meteo.py
+├── sql/                           # Khởi tạo DW và hướng dẫn SQL
+│   ├── 01_init_postgres.sh
+│   └── init_dwh_schema.sql
+├── tests/                         # Test offline/integration và fixture
+├── plugins/                       # Thư mục plugin Airflow
+├── config/                        # Cấu hình Airflow bổ sung
+└── data/                          # Dữ liệu cục bộ, được gitignore
 ```
 
----
+Đề tài PDF và bảng phân công Excel nằm tại thư mục gốc, được liên kết trong mục tài liệu ở trên. `.env` là cấu hình cục bộ, không đưa vào Git.
 
-## 7. LỆNH TIỆN ÍCH QUẢN TRỊ DOCKER
+## Cách tiếp tục triển khai cùng AI
 
-- **Dừng stack**:
-  ```powershell
-  docker compose down
-  ```
-- **Dừng và xóa toàn bộ dữ liệu (volumes)**:
-  ```powershell
-  docker compose down -v
-  ```
-- **Xem log dịch vụ cụ thể**:
-  ```powershell
-  docker compose logs -f minio
-  docker compose logs -f airflow-webserver
-  docker compose logs -f postgres
-  ```
+1. Đọc [business requirements](docs/business-requirements.md), [roadmap](docs/implementation-roadmap.md) và [progress](docs/progress.md).
+2. Chọn task ID trong bảng phân công và xác định một phần việc nhỏ, dữ liệu/phạm vi chạy và tiêu chí nghiệm thu.
+3. Đọc hướng dẫn scoped và tài liệu hợp đồng liên quan trước khi sửa code. Chốt các quyết định còn mở nếu chúng ảnh hưởng trực tiếp tới phần việc.
+4. Triển khai, chạy kiểm tra phù hợp rồi cập nhật `docs/progress.md` ngay trong lượt làm việc đó, kể cả kết quả chưa hoàn tất hoặc kiểm tra thất bại.
+
+Ghi rõ file thay đổi, lệnh thực sự đã chạy, runtime, dữ liệu giả lập hay thực, phạm vi thời gian và hạn chế còn lại. Chủ sở hữu/trạng thái task vẫn quản lý trong workbook. Skills mô tả quy trình; tài liệu domain xác định hợp đồng của dự án.
+
+Cấu hình CI dùng cùng Makefile như kiểm tra cục bộ. Chỉ kết luận GitHub Actions đạt sau khi xem một lần chạy thực tế; file workflow và test cục bộ không thay thế bằng chứng từ GitHub runner.
