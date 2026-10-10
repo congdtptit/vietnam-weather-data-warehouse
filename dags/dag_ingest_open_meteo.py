@@ -7,19 +7,19 @@ DAG tự động hóa thu thập dữ liệu Open-Meteo và tải vào MinIO Bro
 Cho 8 địa phương miền Bắc Việt Nam.
 """
 
-import os
 from datetime import datetime, timedelta
+
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
 default_args = {
-    'owner': 'data_engineering_team',
-    'depends_on_past': False,
-    'start_date': datetime(2024, 1, 1),
-    'email_on_failure': False,
-    'email_on_retry': False,
-    'retries': 2,
-    'retry_delay': timedelta(minutes=2),
+    "owner": "data_engineering_team",
+    "depends_on_past": False,
+    "start_date": datetime(2024, 1, 1),
+    "email_on_failure": False,
+    "email_on_retry": False,
+    "retries": 2,
+    "retry_delay": timedelta(minutes=2),
 }
 
 
@@ -42,30 +42,29 @@ def run_ingestion_task(split: str = None, **kwargs):
 
 
 with DAG(
-    dag_id='open_meteo_ingest_to_bronze_dag',
+    dag_id="open_meteo_ingest_to_bronze_dag",
     default_args=default_args,
-    description='Thu thập dữ liệu khí tượng Open-Meteo (2016-2025) nạp tầng Bronze MinIO',
+    description="Thu thập dữ liệu khí tượng Open-Meteo (2016-2025) nạp tầng Bronze MinIO",
     schedule_interval=None,  # Manual trigger hoặc lập lịch theo nhu cầu
     catchup=False,
-    tags=['weather', 'open-meteo', 'bronze', 'ingestion'],
+    tags=["weather", "open-meteo", "bronze", "ingestion"],
 ) as dag:
-
     t_train = PythonOperator(
-        task_id='ingest_training_data_2016_2023',
+        task_id="ingest_training_data_2016_2023",
         python_callable=run_ingestion_task,
-        op_kwargs={'split': 'training'},
+        op_kwargs={"split": "training"},
     )
 
     t_val = PythonOperator(
-        task_id='ingest_validation_data_2024',
+        task_id="ingest_validation_data_2024",
         python_callable=run_ingestion_task,
-        op_kwargs={'split': 'validation'},
+        op_kwargs={"split": "validation"},
     )
 
     t_test = PythonOperator(
-        task_id='ingest_testing_data_2025',
+        task_id="ingest_testing_data_2025",
         python_callable=run_ingestion_task,
-        op_kwargs={'split': 'testing'},
+        op_kwargs={"split": "testing"},
     )
 
     t_train >> t_val >> t_test

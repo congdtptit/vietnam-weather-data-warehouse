@@ -1,0 +1,18 @@
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+extend-exclude = [".agents", ".codex", "data", "logs"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# Existing Windows stdout setup precedes optional third-party imports.
+"scripts/init_minio.py" = ["E402"]
+"scripts/test_minio_upload.py" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["scripts", "dags"]
+addopts = "-ra --strict-markers --strict-config"
+markers = ["integration: uses only the disposable PostgreSQL/MinIO test stack"]

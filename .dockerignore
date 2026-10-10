@@ -1,0 +1,18 @@
+# Only files used by the Dockerfile enter the build context.
+*
+!Dockerfile
+!.dockerignore
+!requirements.txt
+!requirements-dev.txt
+!pyproject.toml
+!scripts/
+!scripts/*.py
+!dags/
+!dags/*.py
+!sql/
+!sql/init_dwh_schema.sql
+!tests/
+!tests/**
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/

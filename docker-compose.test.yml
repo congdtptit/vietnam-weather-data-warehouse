@@ -1,0 +1,53 @@
+# Standalone disposable stack. Never combine with docker-compose.yml.
+services:
+  pg-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: weather_test
+      POSTGRES_PASSWORD: weather_test_only
+      POSTGRES_DB: weather_test
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U weather_test -d weather_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+  minio-test:
+    image: cgr.dev/chainguard/minio@sha256:f74600a1a46330cdbda1ef760d17a96bd6e0f4a6f0a2c49792ca3ee7e4c6fa18
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: weather_test
+      MINIO_ROOT_PASSWORD: weather_test_only
+    tmpfs:
+      - /data:uid=65532,gid=65532,mode=0700
+  tests:
+    image: weather-tests:2.9.3-python3.10
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: test
+    environment:
+      WEATHER_TESTING: "1"
+      MINIO_ENDPOINT: minio-test:9000
+      MINIO_EXTERNAL_ENDPOINT: minio-test:9000
+      MINIO_ROOT_USER: weather_test
+      MINIO_ROOT_PASSWORD: weather_test_only
+      MINIO_BUCKET_BRONZE: bronze
+      MINIO_BUCKET_SILVER: silver
+      MINIO_BUCKET_GOLD: gold
+      MINIO_SECURE: "false"
+      POSTGRES_HOST: pg-test
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: weather_test
+      POSTGRES_PASSWORD: weather_test_only
+      DWH_DB: weather_test
+    command: ["-m", "integration"]
+    depends_on:
+      pg-test:
+        condition: service_healthy
+      minio-test:
+        condition: service_started
+networks:
+  default:
+    internal: true

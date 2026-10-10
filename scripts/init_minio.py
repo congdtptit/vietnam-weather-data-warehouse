@@ -5,9 +5,9 @@ Khởi tạo và cấu hình các bucket Bronze, Silver, Gold trên MinIO Data L
 Đề tài: Xây dựng kho dữ liệu khí tượng đa nguồn phục vụ phân tích xu hướng và dự báo khả năng mưa tại miền Bắc Việt Nam
 """
 
+import io
 import os
 import sys
-import io
 
 if sys.platform == "win32":
     try:
@@ -16,8 +16,10 @@ if sys.platform == "win32":
         pass
 from minio import Minio
 from minio.error import S3Error
+
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except ImportError:
     # Fallback nếu chưa cài python-dotenv
