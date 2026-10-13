@@ -200,3 +200,70 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
   - Small-scope mock execution for both Open-Meteo and Meteostat transformers verified Parquet serialization and PyArrow deserialization round-trip.
 - Data scope: Small synthetic fixtures and mocks (3 synthetic hours across 2024-02-29/2024-03-01 boundary, mock CSV/JSON payloads, PyArrow table round-trip). No live external weather API calls, no MinIO production writes, and no full 10-year historical backfill.
 - Limits: Full historical backfill, DW loading, and real MinIO cluster operations remain unexecuted and unverified.
+
+## Silver Layer Live Overwrite Execution — 2026-10-11
+
+- Related work: workbook ID 10 (`API/stations → Silver`) in `Theo dõi công việc!A14:O14`, `docs/data-contract.md`.
+- Objective/scope: Execute full Silver layer overwrite from existing Bronze data in MinIO to apply reviewed quality checks, pressure type distinctions, range validation without clipping, and updated station mappings.
+- Execution commands and results:
+  - `python scripts/transform_open_meteo_to_silver.py --start-year 2016 --end-year 2025 --overwrite`:
+    - 80 Bronze files processed (8 locations x 10 years).
+    - 960 monthly Parquet files created under `silver/weather_hourly/`.
+    - 701,376 clean hourly records with explicit `pressure_type = "surface"`.
+    - DQ report: `silver/quality_reports/dq_report_open_meteo_20261011_010719.json`.
+    - 0 failures encountered.
+  - `python scripts/transform_meteostat_to_silver.py --start-year 2016 --end-year 2025 --overwrite`:
+    - 34 Bronze CSV files processed (only station-years with actual hourly reports; 404 years cleanly skipped).
+    - 404 monthly Parquet files created under `silver/weather_hourly/` with explicit `pressure_type = "sea_level"`, `station_id` provenance, and corrected station mappings (Việt Trì `48825` -> `PTO`, Thái Nguyên `48826` -> `TNG`).
+    - 292,769 clean hourly observation records.
+    - 5,263 missing hours detected across years via chronological grid comparison (e.g. Việt Trì 2017: 5,072 records, 57.9% coverage of 8,760h, 3,688h missing).
+    - Cleaned station metadata published: `silver/stations/stations_metadata_cleaned.parquet` (10 stations with status annotations).
+    - DQ report: `silver/quality_reports/dq_report_meteostat_20261011_010757.json`.
+    - 0 failures encountered.
+  - Total Silver objects in MinIO: 1,488 objects (1,479 hourly Parquets, 2 station metadata Parquets, 7 DQ JSON reports).
+- Verification: PyArrow sample inspection confirmed schema, UTC timezone, and `pressure_type` integrity across both sources.
+- Limits: Fact observation loading into PostgreSQL DWH, Gold aggregation, CART ML datasets, and Power BI dashboards remain unexecuted.
+
+## Gold Observations Curation & Data Warehouse Loading — 2026-10-13
+
+- Related work: workbook IDs 12 (`DimDate/Time/Source`), 13 (`Star Schema DDL`), 16 (`Silver → Gold`), and 18 (`Observation fact loading`) in `Theo dõi công việc!A16:O22`, `docs/warehouse-schema.md`, `docs/data-contract.md`, and `docs/NAMING_CONVENTIONS.md` Table 5.
+- Objective/scope: Populate and synchronize Dimension tables in PostgreSQL DWH (`weather_dwh`), export Dimension Parquets to MinIO Gold bucket, curate Silver observations into monthly Star Schema Parquet files under `gold/fact_weather_observation/`, and load into PostgreSQL `fact_weather_observation`. Calendar basis selected per confirmed user decision: Vietnam Local Time (`Asia/Ho_Chi_Minh` UTC+7 / `timestamp_local`) for `date_key` (YYYYMMDD) and `time_key` (HH00). Verified on 2024 scope (leap year, 8 canonical locations) with full idempotent rerun.
+- Changes:
+  - Authored `scripts/seed_dimensions.py`: Generated 4,018 days (2016–2026) for `dim_date`, seeded 10 stations for `dim_station`, and exported all 5 dimension tables (`dim_date`, `dim_location`, `dim_source`, `dim_station`, `dim_time`) to MinIO `gold/` as snappy Parquet.
+  - Authored `scripts/load_gold_observations.py`: Curated Silver hourly data, resolved dimension surrogate keys, mapped Vietnam local time keys (`date_key`, `time_key`), exported consolidated monthly Parquet to `gold/fact_weather_observation/`, and loaded into PostgreSQL `fact_weather_observation` using transactional upserts (`ON CONFLICT (date_key, time_key, location_key, source_key) DO UPDATE`).
+  - Authored `tests/test_gold_observations.py`: 4 unit tests verifying calendar boundaries (17:00 UTC -> 00:00 next day local), unmapped location filtering, Parquet round-trip serialization, and SQL type conversion.
+  - Normalized line endings to LF in `sql/01_init_postgres.sh`.
+- Checks:
+  - `python scripts/seed_dimensions.py`: Seeded 4,018 dates, 10 stations, exported 5 dimension Parquets to MinIO.
+  - `python scripts/load_gold_observations.py --start-year 2024 --end-year 2024`: 12 months processed in 30.73s; 113,545 records curated to MinIO Gold Parquet and 113,545 rows upserted into PostgreSQL DWH (`fact_weather_observation`). 0 failures.
+  - SQL verification:
+    - Open-Meteo: 70,272 rows (8 locations x 8,784h leap year), avg temp 24.42 °C.
+    - Meteostat: 43,273 rows across 5 active canonical stations, avg temp 24.28 °C.
+  - Idempotent rerun verification: Reran `python scripts/load_gold_observations.py --start-year 2024 --end-year 2024 --location HAN`; confirmed total row count in PostgreSQL remained exactly 113,545 with 0 duplicates.
+  - `python -m ruff check scripts/ tests/test_gold_observations.py`: Passed with 0 errors.
+  - `python -m ruff format --check scripts/ tests/test_gold_observations.py`: Passed.
+  - `WEATHER_TESTING=1 pytest tests/test_ingestion.py tests/test_silver_transformations.py tests/test_gold_observations.py`: **31 passed in 1.19s**.
+- Data: Real Silver Parquet data from MinIO for 2024 across 8 northern Vietnam canonical locations (HAN, PTO, TNG, TUQ, LCA, HBI, HPH, NBI). 113,545 observation rows loaded into PostgreSQL DWH. 12 monthly Gold Parquet files + 5 dimension Parquet files created in MinIO `gold` bucket.
+- Limits: Years 2016–2023 and 2025 remain in Silver Parquet on MinIO and have not yet been backfilled into PostgreSQL DWH. CART ML dataset generation (ID 21–23) and Power BI connection (ID 20) remain future work.
+
+## Full 10-Year Gold Observations Backfill & DWH Population — 2026-10-13
+
+- Related work: workbook IDs 16 (`Silver → Gold`) and 18 (`Observation fact loading`) in `Theo dõi công việc!A20:O22`, `docs/warehouse-schema.md`, `docs/data-contract.md`, and `docs/NAMING_CONVENTIONS.md` Table 5.
+- Objective/scope: Execute complete 10-year backfill (2016–2025) of hourly weather observations from Silver Parquet into MinIO Gold Parquet and PostgreSQL Data Warehouse (`fact_weather_observation`), covering 8 canonical northern Vietnam locations across all 120 months.
+- Execution commands and results:
+  - `python scripts/load_gold_observations.py --start-year 2016 --end-year 2025`:
+    - 120 months processed (10 years x 12 months) in 289.6 seconds.
+    - 120 monthly Star Schema Parquet files created under `gold/fact_weather_observation/`.
+    - **994,145 curated hourly observation records** loaded into PostgreSQL DWH `fact_weather_observation` (100% exact reconciliation between Silver clean, Gold Parquet, and PostgreSQL DWH).
+    - Source breakdown:
+      - Open-Meteo: **701,376 records** (8 locations x 10 years x 8,760h/8,784h; average temperature 23.92 °C, total rainfall 180,520.90 mm).
+      - Meteostat: **292,769 records** (all available station observation hours across 5 active canonical stations; average temperature 24.12 °C, total rainfall 46,508.10 mm).
+    - Total objects in MinIO `gold` bucket: **136 objects** (120 monthly fact Parquets, 5 dimension Parquets, 11 DQ JSON reports).
+    - DQ & Reconciliation report: `gold/quality_reports/dq_report_gold_load_20261013_224341.json`.
+    - 0 failures encountered.
+- Verification:
+  - Direct SQL aggregate queries on `fact_weather_observation` confirmed full temporal range (`2016-01-01 07:00:00` to `2026-01-01 06:00:00` Vietnam local time) and distinct location/source coverage.
+  - Idempotent upsert verified with 0 duplicate rows.
+- Limits: CART ML dataset feature extraction (ID 21–23) and Power BI dashboards (ID 19–20) remain the next tasks.
+
+
