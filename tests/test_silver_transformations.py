@@ -423,7 +423,10 @@ def test_unmapped_stations_are_rejected_not_unknown():
 # 6. Error handling & exit status (mock tests)
 # -----------------------------------------------------------------------------
 def test_is_s3_not_found_error_distinction():
-    """S3Error distinction: NoSuchKey is missing object, AccessDenied is failure."""
+    """S3Error distinction: NoSuchKey is missing object, AccessDenied is failure.
+
+    Also tests robustness across MinIO versions where code is None, in message, or str.
+    """
     no_such_key = S3Error(
         None, "NoSuchKey", "The specified key does not exist", "/res", "req", "host"
     )
@@ -431,6 +434,32 @@ def test_is_s3_not_found_error_distinction():
 
     assert is_s3_not_found_error(no_such_key) is True
     assert is_s3_not_found_error(access_denied) is False
+
+    # Variations where code is None but message/str contains NoSuchKey
+    class MockS3ErrorCodeNone:
+        code = None
+        message = "NoSuchKey"
+
+    class MockS3ErrorStringOnly(Exception):
+        code = None
+        message = None
+
+        def __str__(self):
+            return "S3 operation failed; code: NoSuchKey, message: The specified key does not exist"
+
+    class MockS3Error404(Exception):
+        code = None
+        message = "HTTP 404 Not Found"
+
+    class MockS3ErrorAccessDenied:
+        code = None
+        message = "AccessDenied"
+
+    assert is_s3_not_found_error(MockS3ErrorCodeNone()) is True
+    assert is_s3_not_found_error(MockS3ErrorStringOnly()) is True
+    assert is_s3_not_found_error(MockS3Error404()) is True
+    assert is_s3_not_found_error(MockS3ErrorAccessDenied()) is False
+    assert is_s3_not_found_error(None) is False
 
 
 def test_ingest_raises_on_access_denied(monkeypatch):

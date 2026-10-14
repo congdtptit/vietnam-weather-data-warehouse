@@ -122,10 +122,58 @@ def get_minio_client() -> Minio:
         return client
 
 
-def is_s3_not_found_error(err: S3Error) -> bool:
-    """Check if S3Error indicates a missing object rather than permission or server failure."""
+def is_s3_not_found_error(err: Any) -> bool:
+    """Return True if the error corresponds to an S3 'NoSuchKey' / HTTP 404 (object missing).
+
+    Handles variations in minio.error.S3Error across versions where the code may be in
+    different attributes, code is None, or only present in the string representation.
+    """
+    if err is None:
+        return False
+
     code = getattr(err, "code", None)
-    return code in ("NoSuchKey", "ResourceNotFound")
+    message = getattr(err, "message", None)
+
+    # Explicit denial / auth errors must never be treated as missing object
+    if code in ("AccessDenied", "SignatureDoesNotMatch", "InvalidAccessKeyId"):
+        return False
+    if message in ("AccessDenied", "SignatureDoesNotMatch", "InvalidAccessKeyId"):
+        return False
+
+    # Check code attribute
+    if code in ("NoSuchKey", "ResourceNotFound"):
+        return True
+
+    # Check message attribute (common when code is None or arguments are shifted)
+    if message in ("NoSuchKey", "ResourceNotFound"):
+        return True
+
+    # Check args (some S3Error variations place code or message in args)
+    if hasattr(err, "args") and any(
+        "NoSuchKey" in str(a) or "ResourceNotFound" in str(a) for a in err.args
+    ):
+        return True
+
+    # String representation inspection
+    text = ""
+    try:
+        text = str(err) or ""
+    except Exception:
+        text = ""
+
+    if isinstance(message, str):
+        text = f"{text} {message}"
+
+    if "AccessDenied" in text:
+        return False
+
+    if "NoSuchKey" in text or "ResourceNotFound" in text:
+        return True
+
+    if "404" in text or "Not Found" in text or "Object does not exist" in text:
+        return True
+
+    return False
 
 
 def clean_and_standardize_open_meteo(

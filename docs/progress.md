@@ -266,4 +266,24 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
   - Idempotent upsert verified with 0 duplicate rows.
 - Limits: CART ML dataset feature extraction (ID 21–23) and Power BI dashboards (ID 19–20) remain the next tasks.
 
+## S3Error NoSuchKey Detection Robustness Fix — 2026-10-14
+
+- Related work: workbook IDs 9 (`Meteostat/NOAA → Bronze`) and 10 (`API/stations → Silver`) in `Theo dõi công việc!A13:O14`, `tests/test_silver_transformations.py`.
+- Objective/scope: Fix failing unit tests `test_is_s3_not_found_error_distinction` and `test_ingest_handles_404_as_allowed_skip` by making S3 missing-object detection (`is_s3_not_found_error`) robust to diverse `minio.error.S3Error` representations where `code` is `None` or located in `message`, `args`, or string representations across different library versions and test mock shapes.
+- Changes:
+  - `scripts/transform_meteostat_to_silver.py`: Enhanced `is_s3_not_found_error(err)` to inspect `code`, `message`, `args`, and string representation for `NoSuchKey`, `ResourceNotFound`, and HTTP 404 markers, while strictly asserting that `AccessDenied` / auth errors evaluate to `False`.
+  - `scripts/ingest_meteostat.py`: Updated `is_s3_not_found_error(err)` identically to ensure missing objects during `client.stat_object()` proceed to fetch without triggering unhandled ingestion failures.
+  - `scripts/transform_open_meteo_to_silver.py`: Updated `is_s3_not_found_error(err)` symmetrically for unified error handling across pipelines.
+  - `tests/test_silver_transformations.py`: Expanded `test_is_s3_not_found_error_distinction` to verify `S3Error(None, "NoSuchKey", ...)`, mock `code=None` with message, string-only `NoSuchKey`, HTTP 404, `AccessDenied`, and `None`.
+- Checks:
+  - `python -m ruff check scripts/ tests/test_silver_transformations.py`: Passed (0 errors).
+  - `python -m ruff format --check scripts/ tests/test_silver_transformations.py`: Passed (11 files formatted).
+  - `WEATHER_TESTING=1 pytest tests/test_silver_transformations.py::test_is_s3_not_found_error_distinction tests/test_silver_transformations.py::test_ingest_handles_404_as_allowed_skip -v`: **2 passed in 0.99s**.
+  - `WEATHER_TESTING=1 pytest tests/test_silver_transformations.py -v`: **20 passed in 1.21s**.
+  - `WEATHER_TESTING=1 pytest tests/test_gold_observations.py tests/test_ingestion.py tests/test_silver_transformations.py -v`: **31 passed in 1.25s**.
+- Data: Synthetic mock error fixtures and isolated test suite. No production S3/MinIO writes or network requests made.
+- Limits: `tests/test_runtime.py` requires optional dependency `geopandas` not installed in local environment (unrelated to S3 error handling). Full live pipeline execution unchanged.
+- Next step: Ready to commit and push to branch or continue with CART ML dataset preparation (ID 21–23).
+
+
 
