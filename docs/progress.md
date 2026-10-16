@@ -285,5 +285,28 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
 - Limits: `tests/test_runtime.py` requires optional dependency `geopandas` not installed in local environment (unrelated to S3 error handling). Full live pipeline execution unchanged.
 - Next step: Ready to commit and push to branch or continue with CART ML dataset preparation (ID 21–23).
 
+## PR #5 Merge Review Remediation (Gold ETL & DWH Loading) — 2026-10-16
 
-
+- Related work: workbook IDs 8, 9, 10, 16, 18 (`Open-Meteo/Meteostat Ingestion, Silver ETL, Gold Curation & DWH Loading`), PR #5 review findings.
+- Objective/scope: Resolve all 6 technical defects (4 P1s, 2 P2s), add regression test suite, reconcile calendar key documentation across domain contracts, translate Vietnamese progress report to English, and eliminate whitespace/formatting defects.
+- Changes:
+  - `scripts/transform_meteostat_to_silver.py`, `scripts/transform_open_meteo_to_silver.py`, `scripts/ingest_meteostat.py`, `scripts/ingest_open_meteo.py`: Fixed `is_s3_not_found_error` to directly inspect authoritative error code attribute (`NoSuchKey`, `NoSuchBucket`, `NoSuchObject`, `ResourceNotFound`) and HTTP 404 response status, removing substring matching on arbitrary message/request ID strings. Re-raise retryable server errors.
+  - `scripts/load_gold_observations.py`:
+    - Added `SilverReadError` and proper S3 `NoSuchKey` handling to prevent swallowing Silver read/Parquet parse errors, blocking publication and recording failed keys in `stats['failures']`.
+    - Added location merge in `save_gold_parquet` to preserve unaffected locations during location-filtered reruns.
+    - Added strict validation for identical vs conflicting duplicates; identical duplicates collapse cleanly, conflicting duplicates on observation grain reject publication with descriptive error and record failure.
+    - Added transactional rollback (`conn.rollback()`) on SQL error between months, preventing connection abortion from cascading.
+    - Added UTC timestamp timezone-awareness and exact hourly grid validation (`minute == second == microsecond == nanosecond == 0`), and deterministic local timestamp derivation from canonical UTC using `Asia/Ho_Chi_Minh`.
+  - `tests/test_silver_transformations.py`: Updated `S3Error` constructors to match pinned `minio==7.2.7` library signature `S3Error(code, message, resource, request_id, host_id, response, ...)`, and added test for S3Error with '404' in request ID.
+  - `tests/test_review_regressions.py`: Authored comprehensive regression test suite covering all 6 review defects (unit and integration tests).
+  - `docs/data-contract.md` & `docs/warehouse-schema.md`: Reconciled calendar key basis, confirming Vietnam Local Time (`Asia/Ho_Chi_Minh`, UTC+7) for `date_key` (YYYYMMDD) and `time_key` (HH00) derived deterministically from canonical `timestamp_utc`.
+  - `bao_cao_tien_do_du_an.md`: Translated complete report into English to comply with repository documentation language rule, and removed trailing whitespace.
+- Checks:
+  - `ruff check scripts dags tests`: PASS (all checks passed).
+  - `ruff format --check scripts dags tests`: PASS (all files formatted).
+  - `docker run --rm --network none weather-tests:2.9.3-python3.10 -m 'not integration'`: PASS (43 passed, 8 deselected).
+  - `docker compose -p weather-tests -f docker-compose.test.yml up --abort-on-container-exit --exit-code-from tests tests`: PASS (8 passed, 43 deselected).
+- Data: Synthetic test fixtures and Docker test services (PostgreSQL 16, MinIO); existing MinIO Lakehouse and PostgreSQL DW data preserved.
+- Evidence: Regression test suite in `tests/test_review_regressions.py`.
+- Limits: CDS/ERA5 API ingestion and regional boundary GeoJSON remain open pending external access.
+- Next step: Ready for PR #5 re-review and merge into `main`.

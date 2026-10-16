@@ -136,6 +136,37 @@ def load_dimension_lookups(conn) -> tuple[dict[str, int], dict[str, int], dict[s
     return loc_map, source_map, station_map
 
 
+class SilverReadError(RuntimeError):
+    """Exception raised when reading or parsing a Silver Parquet object fails."""
+
+    def __init__(self, key: str, original_error: Exception):
+        super().__init__(f"Error reading/parsing Silver Parquet object '{key}': {original_error}")
+        self.key = key
+        self.original_error = original_error
+
+
+def is_s3_not_found_error(err: Any) -> bool:
+    """Return True if the error corresponds to an S3 'NoSuchKey' / HTTP 404 (object missing).
+
+    Checks authoritative S3 error code or HTTP response status 404.
+    Does NOT match arbitrary substrings in messages, resources, or request IDs.
+    """
+    if err is None:
+        return False
+
+    code = getattr(err, "code", None)
+    if code in ("NoSuchKey", "NoSuchBucket", "NoSuchObject", "ResourceNotFound"):
+        return True
+
+    resp = getattr(err, "response", None)
+    if resp is not None:
+        status = getattr(resp, "status", getattr(resp, "status_code", None))
+        if status == 404:
+            return True
+
+    return False
+
+
 def clean_row_value(val: Any) -> Any:
     """Convert numpy/pandas types to python native types for psycopg2/SQL."""
     if pd.isna(val) or val is None:
@@ -169,12 +200,22 @@ def process_month_observations(
         if not obj.object_name.endswith(".parquet"):
             continue
         try:
-            data = minio_client.get_object(BUCKET_SILVER, obj.object_name).read()
+            resp = minio_client.get_object(BUCKET_SILVER, obj.object_name)
+            try:
+                data = resp.read()
+            finally:
+                resp.close()
+                resp.release_conn()
             df_part = pd.read_parquet(io.BytesIO(data))
             if not df_part.empty:
                 dfs.append(df_part)
+        except S3Error as s3_err:
+            if is_s3_not_found_error(s3_err):
+                print(f"  [-] Silver file not found: {obj.object_name}")
+                continue
+            raise SilverReadError(obj.object_name, s3_err) from s3_err
         except Exception as e:
-            print(f"  [!] Error reading Silver file {obj.object_name}: {e}")
+            raise SilverReadError(obj.object_name, e) from e
 
     if not dfs:
         return pd.DataFrame()
@@ -191,25 +232,96 @@ def process_month_observations(
     if combined_df.empty:
         return pd.DataFrame()
 
-    # Parse timestamps
-    combined_df["timestamp_utc"] = pd.to_datetime(combined_df["timestamp_utc"], utc=True)
-    if (
-        "timestamp_local" not in combined_df.columns
-        or combined_df["timestamp_local"].isnull().all()
-    ):
-        combined_df["timestamp_local"] = (
-            combined_df["timestamp_utc"].dt.tz_convert("Asia/Ho_Chi_Minh").dt.tz_localize(None)
+    # Part 1, Item 6: Validate canonical UTC timestamp and exact hourly grid
+    if "timestamp_utc" not in combined_df.columns:
+        raise ValueError(
+            f"Month {year}-{m_str}: 'timestamp_utc' column missing from Silver observations."
         )
-    else:
-        combined_df["timestamp_local"] = pd.to_datetime(combined_df["timestamp_local"])
 
-    # Calendar basis: Vietnam Local Time (UTC+7) per user decision Q2
-    combined_df["date_key"] = combined_df["timestamp_local"].dt.strftime("%Y%m%d").astype(int)
-    combined_df["time_key"] = combined_df["timestamp_local"].dt.hour * 100
+    try:
+        combined_df["timestamp_utc"] = pd.to_datetime(combined_df["timestamp_utc"], utc=True)
+    except Exception as e:
+        raise ValueError(
+            f"Month {year}-{m_str}: Failed to parse 'timestamp_utc' as UTC: {e}"
+        ) from e
+
+    if combined_df["timestamp_utc"].isna().any():
+        null_count = int(combined_df["timestamp_utc"].isna().sum())
+        raise ValueError(
+            f"Month {year}-{m_str}: Found {null_count} null/NaT 'timestamp_utc' values."
+        )
+
+    # Validate exact hourly grid (minute == 0, second == 0, microsecond == 0, nanosecond == 0)
+    off_grid_mask = (
+        (combined_df["timestamp_utc"].dt.minute != 0)
+        | (combined_df["timestamp_utc"].dt.second != 0)
+        | (combined_df["timestamp_utc"].dt.microsecond != 0)
+        | (combined_df["timestamp_utc"].dt.nanosecond != 0)
+    )
+    if off_grid_mask.any():
+        off_grid_count = int(off_grid_mask.sum())
+        samples = combined_df.loc[off_grid_mask, "timestamp_utc"].head(3).tolist()
+        raise ValueError(
+            f"Month {year}-{m_str}: Found {off_grid_count} off-grid UTC timestamps (expected HH:00:00). "
+            f"Samples: {samples}"
+        )
+
+    # Always derive local timestamps deterministically from canonical UTC
+    derived_local = (
+        combined_df["timestamp_utc"].dt.tz_convert("Asia/Ho_Chi_Minh").dt.tz_localize(None)
+    )
+
+    # If supplied timestamp_local is present in input, validate against derived local time
+    if "timestamp_local" in combined_df.columns and not combined_df["timestamp_local"].isna().all():
+        supplied_local_series = combined_df["timestamp_local"]
+        if supplied_local_series.isna().any():
+            null_count = int(supplied_local_series.isna().sum())
+            raise ValueError(
+                f"Month {year}-{m_str}: Supplied 'timestamp_local' contains {null_count} partial nulls."
+            )
+
+        supplied_local = pd.to_datetime(supplied_local_series)
+        if supplied_local.dt.tz is not None:
+            supplied_local = supplied_local.dt.tz_convert("Asia/Ho_Chi_Minh").dt.tz_localize(None)
+
+        mismatches = supplied_local != derived_local
+        if mismatches.any():
+            mismatch_count = int(mismatches.sum())
+            sample_mismatches = (
+                combined_df.loc[mismatches, ["timestamp_utc", "timestamp_local"]]
+                .head(3)
+                .to_dict("records")
+            )
+            raise ValueError(
+                f"Month {year}-{m_str}: Supplied 'timestamp_local' conflicts with UTC-derived local time for {mismatch_count} rows. "
+                f"Samples: {sample_mismatches}"
+            )
+
+    combined_df["timestamp_local"] = derived_local
+    combined_df["date_key"] = derived_local.dt.strftime("%Y%m%d").astype(int)
+    combined_df["time_key"] = derived_local.dt.hour * 100
 
     # Foreign key lookups
     combined_df["location_key"] = combined_df["location_code"].map(loc_map)
     combined_df["source_key"] = combined_df["source_name"].map(source_map)
+
+    if combined_df["location_key"].isna().any():
+        missing_locs = (
+            combined_df[combined_df["location_key"].isna()]["location_code"].unique().tolist()
+        )
+        raise ValueError(
+            f"Month {year}-{m_str}: Unknown location codes with no dimension key: {missing_locs}"
+        )
+    if combined_df["source_key"].isna().any():
+        missing_srcs = (
+            combined_df[combined_df["source_key"].isna()]["source_name"].unique().tolist()
+        )
+        raise ValueError(
+            f"Month {year}-{m_str}: Unknown source names with no dimension key: {missing_srcs}"
+        )
+
+    combined_df["location_key"] = combined_df["location_key"].astype(int)
+    combined_df["source_key"] = combined_df["source_key"].astype(int)
 
     # Station key lookup (nullable for model/grid sources like Open-Meteo)
     if "station_id" in combined_df.columns:
@@ -226,10 +338,27 @@ def process_month_observations(
         else:
             combined_df[col] = pd.to_numeric(combined_df[col], errors="coerce")
 
-    # Order-invariant deduplication on grain: (date_key, time_key, location_key, source_key)
-    # Identical duplicates collapsed; first deterministic row kept
+    # Part 1, Item 4: Quarantine or reject conflicting duplicate observations
+    # Grain columns: (date_key, time_key, location_key, source_key)
     grain_cols = ["date_key", "time_key", "location_key", "source_key"]
-    dedup_df = combined_df.drop_duplicates(subset=grain_cols, keep="first").copy()
+    full_cols = grain_cols + FACT_MEASUREMENT_COLS
+
+    # Collapse duplicates ONLY when both observation key AND all measurement values are identical
+    dedup_df = combined_df.drop_duplicates(subset=full_cols, keep="first").copy()
+
+    # Reject conflicting duplicates where keys match but measurements differ
+    conflict_mask = dedup_df.duplicated(subset=grain_cols, keep=False)
+    if conflict_mask.any():
+        num_conflicts = int(conflict_mask.sum())
+        sample_conflicts = (
+            dedup_df.loc[conflict_mask, grain_cols + FACT_MEASUREMENT_COLS]
+            .head(4)
+            .to_dict("records")
+        )
+        raise ValueError(
+            f"Month {year}-{m_str}: Conflicting duplicate observations detected for grain {grain_cols} "
+            f"({num_conflicts} rows). Samples: {sample_conflicts}"
+        )
 
     # Sort deterministically
     dedup_df = dedup_df.sort_values(by=grain_cols).reset_index(drop=True)
@@ -242,19 +371,70 @@ def save_gold_parquet(
     year: int,
     month: int,
     overwrite: bool = False,
+    location_filter: str | None = None,
 ) -> str | None:
-    """Save consolidated monthly fact observations to MinIO Gold Parquet."""
+    """Save consolidated monthly fact observations to MinIO Gold Parquet.
+
+    When running with a location_filter, preserves unaffected locations from
+    the existing Gold Parquet file if present.
+    """
     m_str = f"{month:02d}"
     ym_str = f"{year}{m_str}"
     gold_key = f"fact_weather_observation/year={year}/month={m_str}/fact_weather_observation_{ym_str}.parquet"
 
-    if not overwrite:
+    # If running with a location filter, inspect existing Gold object
+    if location_filter:
+        loc_code = location_filter.strip().upper()
+        existing_df: pd.DataFrame | None = None
         try:
-            stat = minio_client.stat_object(BUCKET_GOLD, gold_key)
-            if stat.size > 500:
-                return gold_key
-        except S3Error:
-            pass
+            resp = minio_client.get_object(BUCKET_GOLD, gold_key)
+            try:
+                existing_bytes = resp.read()
+            finally:
+                resp.close()
+                resp.release_conn()
+            existing_df = pd.read_parquet(io.BytesIO(existing_bytes))
+        except S3Error as err:
+            if is_s3_not_found_error(err):
+                existing_df = None
+            else:
+                # Storage / server error: abort publication!
+                raise RuntimeError(
+                    f"Storage error reading existing Gold Parquet {gold_key}: {err}"
+                ) from err
+        except Exception as e:
+            # Corrupt Parquet or unexpected parse error: abort publication!
+            raise RuntimeError(
+                f"Corrupt or unreadable existing Gold Parquet {gold_key}: {e}"
+            ) from e
+
+        if existing_df is not None and not existing_df.empty:
+            # Preserve unaffected locations and replace target location
+            unaffected_df = existing_df[existing_df["location_code"] != loc_code].copy()
+            merged_df = pd.concat([unaffected_df, df], ignore_index=True)
+            grain_cols = ["date_key", "time_key", "location_key", "source_key"]
+            df_to_save = (
+                merged_df.drop_duplicates(subset=grain_cols, keep="last")
+                .sort_values(by=grain_cols)
+                .reset_index(drop=True)
+            )
+        else:
+            df_to_save = df
+    else:
+        if not overwrite:
+            try:
+                stat = minio_client.stat_object(BUCKET_GOLD, gold_key)
+                if stat.size > 500:
+                    return gold_key
+            except S3Error as err:
+                if not is_s3_not_found_error(err):
+                    raise RuntimeError(
+                        f"Storage error checking Gold Parquet {gold_key}: {err}"
+                    ) from err
+            except Exception as e:
+                raise RuntimeError(f"Error checking Gold Parquet {gold_key}: {e}") from e
+
+        df_to_save = df
 
     export_cols = [
         "date_key",
@@ -268,13 +448,13 @@ def save_gold_parquet(
         "timestamp_local",
     ] + FACT_MEASUREMENT_COLS
 
-    if "pressure_type" in df.columns:
+    if "pressure_type" in df_to_save.columns:
         export_cols.append("pressure_type")
-    if "observation_type" in df.columns:
+    if "observation_type" in df_to_save.columns:
         export_cols.append("observation_type")
 
-    available_cols = [c for c in export_cols if c in df.columns]
-    out_df = df[available_cols].copy()
+    available_cols = [c for c in export_cols if c in df_to_save.columns]
+    out_df = df_to_save[available_cols].copy()
 
     buf = io.BytesIO()
     out_df.to_parquet(buf, index=False, engine="pyarrow", compression="snappy")
@@ -339,9 +519,13 @@ def load_dwh_fact_observations(conn, df: pd.DataFrame) -> int:
             timestamp_local = EXCLUDED.timestamp_local;
     """
 
-    with conn.cursor() as cur:
-        execute_values(cur, upsert_sql, records, page_size=2500)
-    conn.commit()
+    try:
+        with conn.cursor() as cur:
+            execute_values(cur, upsert_sql, records, page_size=2500)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
     return len(records)
 
@@ -408,6 +592,17 @@ def run_gold_pipeline(
                         station_map=station_map,
                         location_filter=target_location,
                     )
+                except SilverReadError as sre:
+                    print(f"  [!] Month {ym_str}: {sre}")
+                    stats["failures"].append(
+                        {
+                            "month": ym_str,
+                            "stage": "silver_read",
+                            "failed_keys": [sre.key],
+                            "error": str(sre.original_error),
+                        }
+                    )
+                    continue
                 except Exception as e:
                     print(f"  [!] Month {ym_str}: Error preparing observations: {e}")
                     stats["failures"].append({"month": ym_str, "stage": "curate", "error": str(e)})
@@ -418,17 +613,6 @@ def run_gold_pipeline(
                     continue
 
                 records_count = len(df_month)
-                stats["total_gold_records"] += records_count
-
-                # Track breakdown
-                for src, cnt in df_month["source_name"].value_counts().items():
-                    stats["records_by_source"][src] = stats["records_by_source"].get(src, 0) + int(
-                        cnt
-                    )
-                for loc, cnt in df_month["location_code"].value_counts().items():
-                    stats["records_by_location"][loc] = stats["records_by_location"].get(
-                        loc, 0
-                    ) + int(cnt)
 
                 # 2. Save Gold Parquet to MinIO
                 gold_key = None
@@ -440,6 +624,7 @@ def run_gold_pipeline(
                             year=year,
                             month=month,
                             overwrite=overwrite,
+                            location_filter=target_location,
                         )
                         stats["total_gold_parquet_created"] += 1
                     except Exception as e:
@@ -447,6 +632,7 @@ def run_gold_pipeline(
                         stats["failures"].append(
                             {"month": ym_str, "stage": "gold_upload", "error": str(e)}
                         )
+                        continue
 
                 # 3. Load into PostgreSQL DWH
                 dwh_loaded = 0
@@ -455,10 +641,26 @@ def run_gold_pipeline(
                         dwh_loaded = load_dwh_fact_observations(conn, df_month)
                         stats["total_dwh_upserted"] += dwh_loaded
                     except Exception as e:
+                        if conn:
+                            try:
+                                conn.rollback()
+                            except Exception:
+                                pass
                         print(f"  [!] Month {ym_str}: Error loading PostgreSQL DWH: {e}")
                         stats["failures"].append(
                             {"month": ym_str, "stage": "dwh_load", "error": str(e)}
                         )
+                        continue
+
+                stats["total_gold_records"] += records_count
+                for src, cnt in df_month["source_name"].value_counts().items():
+                    stats["records_by_source"][src] = stats["records_by_source"].get(src, 0) + int(
+                        cnt
+                    )
+                for loc, cnt in df_month["location_code"].value_counts().items():
+                    stats["records_by_location"][loc] = stats["records_by_location"].get(
+                        loc, 0
+                    ) + int(cnt)
 
                 print(
                     f"  [+] Month {ym_str}: {records_count:,} records processed "
