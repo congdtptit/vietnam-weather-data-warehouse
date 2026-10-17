@@ -18,9 +18,9 @@ Document version: draft v0.1, 2026-10-08. This is the target implementation cont
 - Target Silver observations are unique by `(source_name, location_code, timestamp_utc)`. Source names map consistently to `DimSource`. Raw station data may have another grain before station selection/aggregation.
 - Preserve codes `HAN`, `PTO`, `TNG`, `TUQ`, `LCA`, `HBI`, `HPH`, `NBI`. These identify research points, not current administrative provinces. Retain requested coordinates and actual station/grid coordinates for traceability.
 - `timestamp_utc`: timezone-aware UTC timestamp at the defined hourly grid after agreed resampling. Assign timezone to naive source timestamps only when metadata confirms it.
-- `timestamp_local`: derived using `Asia/Ho_Chi_Minh` for display, not an independent key. PostgreSQL currently stores it as a timestamp without timezone.
 - Internal processing windows are `[start, end)`. Accumulated measurements may be timestamped at interval start/end; record those semantics and distinguish processing windows from future labels.
-- Calendar basis for `date_key`/`time_key` remains unresolved; see [warehouse schema](warehouse-schema.md).
+- `timestamp_local`: derived deterministically from `timestamp_utc` using `Asia/Ho_Chi_Minh` (UTC+7). Stored in PostgreSQL as a timestamp without timezone.
+- Calendar basis for `date_key`/`time_key`: confirmed as Vietnam Local Time (`Asia/Ho_Chi_Minh`, UTC+7 / `timestamp_local`). `date_key` is formatted as integer `YYYYMMDD` and `time_key` as integer `HH00` (`hour * 100`), derived deterministically from canonical `timestamp_utc`.
 
 ## Standard observation columns
 

@@ -132,10 +132,26 @@ def fetch_meteostat_station_year(
     raise RuntimeError(f"Exhausted retries fetching Meteostat station {station_id} year {year}")
 
 
-def is_s3_not_found_error(err: S3Error) -> bool:
-    """Check if S3Error indicates a genuinely missing object rather than an authorization error."""
+def is_s3_not_found_error(err: Any) -> bool:
+    """Return True if the error corresponds to an S3 'NoSuchKey' / HTTP 404 (object missing).
+
+    Checks authoritative S3 error code or HTTP response status 404.
+    Does NOT match arbitrary substrings in messages, resources, or request IDs.
+    """
+    if err is None:
+        return False
+
     code = getattr(err, "code", None)
-    return code in ("NoSuchKey", "ResourceNotFound")
+    if code in ("NoSuchKey", "NoSuchBucket", "NoSuchObject", "ResourceNotFound"):
+        return True
+
+    resp = getattr(err, "response", None)
+    if resp is not None:
+        status = getattr(resp, "status", getattr(resp, "status_code", None))
+        if status == 404:
+            return True
+
+    return False
 
 
 def ingest_meteostat_data(

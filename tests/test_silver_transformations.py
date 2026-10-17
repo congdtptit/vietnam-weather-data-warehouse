@@ -423,14 +423,38 @@ def test_unmapped_stations_are_rejected_not_unknown():
 # 6. Error handling & exit status (mock tests)
 # -----------------------------------------------------------------------------
 def test_is_s3_not_found_error_distinction():
-    """S3Error distinction: NoSuchKey is missing object, AccessDenied is failure."""
+    """S3Error distinction: NoSuchKey is missing object, AccessDenied is failure.
+
+    Verifies authoritative code attribute or response status 404.
+    Rejects server errors that happen to have 404 in their request-id.
+    """
     no_such_key = S3Error(
-        None, "NoSuchKey", "The specified key does not exist", "/res", "req", "host"
+        "NoSuchKey", "The specified key does not exist", "/res", "req", "host", None
     )
-    access_denied = S3Error(None, "AccessDenied", "Access Denied", "/res", "req", "host")
+    access_denied = S3Error("AccessDenied", "Access Denied", "/res", "req", "host", None)
 
     assert is_s3_not_found_error(no_such_key) is True
     assert is_s3_not_found_error(access_denied) is False
+
+    class MockResponse404:
+        status = 404
+
+    class MockS3Error404(Exception):
+        code = None
+        response = MockResponse404()
+
+    class MockS3ErrorAccessDenied:
+        code = "AccessDenied"
+
+    # Regression: S3Error with '404' in request_id must NOT be classified as not found
+    internal_with_404_req_id = S3Error(
+        "InternalError", "Backend unavailable", "/object", "request-404-id", "host", None
+    )
+
+    assert is_s3_not_found_error(MockS3Error404()) is True
+    assert is_s3_not_found_error(MockS3ErrorAccessDenied()) is False
+    assert is_s3_not_found_error(internal_with_404_req_id) is False
+    assert is_s3_not_found_error(None) is False
 
 
 def test_ingest_raises_on_access_denied(monkeypatch):
@@ -439,7 +463,7 @@ def test_ingest_raises_on_access_denied(monkeypatch):
 
     client = Mock()
     client.stat_object.side_effect = S3Error(
-        None, "AccessDenied", "Access Denied", "/res", "req", "host"
+        "AccessDenied", "Access Denied", "/res", "req", "host", None
     )
 
     monkeypatch.setattr(ingest_meteostat, "get_minio_client", lambda: client)
@@ -457,7 +481,7 @@ def test_ingest_handles_404_as_allowed_skip(monkeypatch):
     import ingest_meteostat
 
     client = Mock()
-    client.stat_object.side_effect = S3Error(None, "NoSuchKey", "missing", "/res", "req", "host")
+    client.stat_object.side_effect = S3Error("NoSuchKey", "missing", "/res", "req", "host", None)
 
     monkeypatch.setattr(ingest_meteostat, "get_minio_client", lambda: client)
     # Mock HTTP 404 return
@@ -518,7 +542,7 @@ def test_process_open_meteo_to_silver_small_mock_run(monkeypatch, hourly_payload
     payload_bytes = json.dumps(hourly_payload).encode("utf-8")
     client.get_object.return_value = SimpleNamespace(read=lambda: payload_bytes)
     # Mock stat_object to indicate objects don't exist yet
-    client.stat_object.side_effect = S3Error(None, "NoSuchKey", "missing", "/res", "req", "host")
+    client.stat_object.side_effect = S3Error("NoSuchKey", "missing", "/res", "req", "host", None)
 
     uploaded_objects: dict[str, bytes] = {}
 
@@ -566,7 +590,7 @@ def test_process_meteostat_to_silver_small_mock_run(monkeypatch):
 
     client = Mock()
     client.get_object.return_value = SimpleNamespace(read=lambda: raw_csv)
-    client.stat_object.side_effect = S3Error(None, "NoSuchKey", "missing", "/res", "req", "host")
+    client.stat_object.side_effect = S3Error("NoSuchKey", "missing", "/res", "req", "host", None)
 
     uploaded_objects: dict[str, bytes] = {}
 

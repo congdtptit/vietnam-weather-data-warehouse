@@ -200,3 +200,141 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
   - Small-scope mock execution for both Open-Meteo and Meteostat transformers verified Parquet serialization and PyArrow deserialization round-trip.
 - Data scope: Small synthetic fixtures and mocks (3 synthetic hours across 2024-02-29/2024-03-01 boundary, mock CSV/JSON payloads, PyArrow table round-trip). No live external weather API calls, no MinIO production writes, and no full 10-year historical backfill.
 - Limits: Full historical backfill, DW loading, and real MinIO cluster operations remain unexecuted and unverified.
+
+## Silver Layer Live Overwrite Execution — 2026-10-11
+
+- Related work: workbook ID 10 (`API/stations → Silver`) in `Theo dõi công việc!A14:O14`, `docs/data-contract.md`.
+- Objective/scope: Execute full Silver layer overwrite from existing Bronze data in MinIO to apply reviewed quality checks, pressure type distinctions, range validation without clipping, and updated station mappings.
+- Execution commands and results:
+  - `python scripts/transform_open_meteo_to_silver.py --start-year 2016 --end-year 2025 --overwrite`:
+    - 80 Bronze files processed (8 locations x 10 years).
+    - 960 monthly Parquet files created under `silver/weather_hourly/`.
+    - 701,376 clean hourly records with explicit `pressure_type = "surface"`.
+    - DQ report: `silver/quality_reports/dq_report_open_meteo_20261011_010719.json`.
+    - 0 failures encountered.
+  - `python scripts/transform_meteostat_to_silver.py --start-year 2016 --end-year 2025 --overwrite`:
+    - 34 Bronze CSV files processed (only station-years with actual hourly reports; 404 years cleanly skipped).
+    - 404 monthly Parquet files created under `silver/weather_hourly/` with explicit `pressure_type = "sea_level"`, `station_id` provenance, and corrected station mappings (Việt Trì `48825` -> `PTO`, Thái Nguyên `48826` -> `TNG`).
+    - 292,769 clean hourly observation records.
+    - 5,263 missing hours detected across years via chronological grid comparison (e.g. Việt Trì 2017: 5,072 records, 57.9% coverage of 8,760h, 3,688h missing).
+    - Cleaned station metadata published: `silver/stations/stations_metadata_cleaned.parquet` (10 stations with status annotations).
+    - DQ report: `silver/quality_reports/dq_report_meteostat_20261011_010757.json`.
+    - 0 failures encountered.
+  - Total Silver objects in MinIO: 1,488 objects (1,479 hourly Parquets, 2 station metadata Parquets, 7 DQ JSON reports).
+- Verification: PyArrow sample inspection confirmed schema, UTC timezone, and `pressure_type` integrity across both sources.
+- Limits: Fact observation loading into PostgreSQL DWH, Gold aggregation, CART ML datasets, and Power BI dashboards remain unexecuted.
+
+## Gold Observations Curation & Data Warehouse Loading — 2026-10-13
+
+- Related work: workbook IDs 12 (`DimDate/Time/Source`), 13 (`Star Schema DDL`), 16 (`Silver → Gold`), and 18 (`Observation fact loading`) in `Theo dõi công việc!A16:O22`, `docs/warehouse-schema.md`, `docs/data-contract.md`, and `docs/NAMING_CONVENTIONS.md` Table 5.
+- Objective/scope: Populate and synchronize Dimension tables in PostgreSQL DWH (`weather_dwh`), export Dimension Parquets to MinIO Gold bucket, curate Silver observations into monthly Star Schema Parquet files under `gold/fact_weather_observation/`, and load into PostgreSQL `fact_weather_observation`. Calendar basis selected per confirmed user decision: Vietnam Local Time (`Asia/Ho_Chi_Minh` UTC+7 / `timestamp_local`) for `date_key` (YYYYMMDD) and `time_key` (HH00). Verified on 2024 scope (leap year, 8 canonical locations) with full idempotent rerun.
+- Changes:
+  - Authored `scripts/seed_dimensions.py`: Generated 4,018 days (2016–2026) for `dim_date`, seeded 10 stations for `dim_station`, and exported all 5 dimension tables (`dim_date`, `dim_location`, `dim_source`, `dim_station`, `dim_time`) to MinIO `gold/` as snappy Parquet.
+  - Authored `scripts/load_gold_observations.py`: Curated Silver hourly data, resolved dimension surrogate keys, mapped Vietnam local time keys (`date_key`, `time_key`), exported consolidated monthly Parquet to `gold/fact_weather_observation/`, and loaded into PostgreSQL `fact_weather_observation` using transactional upserts (`ON CONFLICT (date_key, time_key, location_key, source_key) DO UPDATE`).
+  - Authored `tests/test_gold_observations.py`: 4 unit tests verifying calendar boundaries (17:00 UTC -> 00:00 next day local), unmapped location filtering, Parquet round-trip serialization, and SQL type conversion.
+  - Normalized line endings to LF in `sql/01_init_postgres.sh`.
+- Checks:
+  - `python scripts/seed_dimensions.py`: Seeded 4,018 dates, 10 stations, exported 5 dimension Parquets to MinIO.
+  - `python scripts/load_gold_observations.py --start-year 2024 --end-year 2024`: 12 months processed in 30.73s; 113,545 records curated to MinIO Gold Parquet and 113,545 rows upserted into PostgreSQL DWH (`fact_weather_observation`). 0 failures.
+  - SQL verification:
+    - Open-Meteo: 70,272 rows (8 locations x 8,784h leap year), avg temp 24.42 °C.
+    - Meteostat: 43,273 rows across 5 active canonical stations, avg temp 24.28 °C.
+  - Idempotent rerun verification: Reran `python scripts/load_gold_observations.py --start-year 2024 --end-year 2024 --location HAN`; confirmed total row count in PostgreSQL remained exactly 113,545 with 0 duplicates.
+  - `python -m ruff check scripts/ tests/test_gold_observations.py`: Passed with 0 errors.
+  - `python -m ruff format --check scripts/ tests/test_gold_observations.py`: Passed.
+  - `WEATHER_TESTING=1 pytest tests/test_ingestion.py tests/test_silver_transformations.py tests/test_gold_observations.py`: **31 passed in 1.19s**.
+- Data: Real Silver Parquet data from MinIO for 2024 across 8 northern Vietnam canonical locations (HAN, PTO, TNG, TUQ, LCA, HBI, HPH, NBI). 113,545 observation rows loaded into PostgreSQL DWH. 12 monthly Gold Parquet files + 5 dimension Parquet files created in MinIO `gold` bucket.
+- Limits: Years 2016–2023 and 2025 remain in Silver Parquet on MinIO and have not yet been backfilled into PostgreSQL DWH. CART ML dataset generation (ID 21–23) and Power BI connection (ID 20) remain future work.
+
+## Full 10-Year Gold Observations Backfill & DWH Population — 2026-10-13
+
+- Related work: workbook IDs 16 (`Silver → Gold`) and 18 (`Observation fact loading`) in `Theo dõi công việc!A20:O22`, `docs/warehouse-schema.md`, `docs/data-contract.md`, and `docs/NAMING_CONVENTIONS.md` Table 5.
+- Objective/scope: Execute complete 10-year backfill (2016–2025) of hourly weather observations from Silver Parquet into MinIO Gold Parquet and PostgreSQL Data Warehouse (`fact_weather_observation`), covering 8 canonical northern Vietnam locations across all 120 months.
+- Execution commands and results:
+  - `python scripts/load_gold_observations.py --start-year 2016 --end-year 2025`:
+    - 120 months processed (10 years x 12 months) in 289.6 seconds.
+    - 120 monthly Star Schema Parquet files created under `gold/fact_weather_observation/`.
+    - **994,145 curated hourly observation records** loaded into PostgreSQL DWH `fact_weather_observation` (100% exact reconciliation between Silver clean, Gold Parquet, and PostgreSQL DWH).
+    - Source breakdown:
+      - Open-Meteo: **701,376 records** (8 locations x 10 years x 8,760h/8,784h; average temperature 23.92 °C, total rainfall 180,520.90 mm).
+      - Meteostat: **292,769 records** (all available station observation hours across 5 active canonical stations; average temperature 24.12 °C, total rainfall 46,508.10 mm).
+    - Total objects in MinIO `gold` bucket: **136 objects** (120 monthly fact Parquets, 5 dimension Parquets, 11 DQ JSON reports).
+    - DQ & Reconciliation report: `gold/quality_reports/dq_report_gold_load_20261013_224341.json`.
+    - 0 failures encountered.
+- Verification:
+  - Direct SQL aggregate queries on `fact_weather_observation` confirmed full temporal range (`2016-01-01 07:00:00` to `2026-01-01 06:00:00` Vietnam local time) and distinct location/source coverage.
+  - Idempotent upsert verified with 0 duplicate rows.
+- Limits: CART ML dataset feature extraction (ID 21–23) and Power BI dashboards (ID 19–20) remain the next tasks.
+
+## S3Error NoSuchKey Detection Robustness Fix — 2026-10-14
+
+- Related work: workbook IDs 9 (`Meteostat/NOAA → Bronze`) and 10 (`API/stations → Silver`) in `Theo dõi công việc!A13:O14`, `tests/test_silver_transformations.py`.
+- Objective/scope: Fix failing unit tests `test_is_s3_not_found_error_distinction` and `test_ingest_handles_404_as_allowed_skip` by making S3 missing-object detection (`is_s3_not_found_error`) robust to diverse `minio.error.S3Error` representations where `code` is `None` or located in `message`, `args`, or string representations across different library versions and test mock shapes.
+- Changes:
+  - `scripts/transform_meteostat_to_silver.py`: Enhanced `is_s3_not_found_error(err)` to inspect `code`, `message`, `args`, and string representation for `NoSuchKey`, `ResourceNotFound`, and HTTP 404 markers, while strictly asserting that `AccessDenied` / auth errors evaluate to `False`.
+  - `scripts/ingest_meteostat.py`: Updated `is_s3_not_found_error(err)` identically to ensure missing objects during `client.stat_object()` proceed to fetch without triggering unhandled ingestion failures.
+  - `scripts/transform_open_meteo_to_silver.py`: Updated `is_s3_not_found_error(err)` symmetrically for unified error handling across pipelines.
+  - `tests/test_silver_transformations.py`: Expanded `test_is_s3_not_found_error_distinction` to verify `S3Error(None, "NoSuchKey", ...)`, mock `code=None` with message, string-only `NoSuchKey`, HTTP 404, `AccessDenied`, and `None`.
+- Checks:
+  - `python -m ruff check scripts/ tests/test_silver_transformations.py`: Passed (0 errors).
+  - `python -m ruff format --check scripts/ tests/test_silver_transformations.py`: Passed (11 files formatted).
+  - `WEATHER_TESTING=1 pytest tests/test_silver_transformations.py::test_is_s3_not_found_error_distinction tests/test_silver_transformations.py::test_ingest_handles_404_as_allowed_skip -v`: **2 passed in 0.99s**.
+  - `WEATHER_TESTING=1 pytest tests/test_silver_transformations.py -v`: **20 passed in 1.21s**.
+  - `WEATHER_TESTING=1 pytest tests/test_gold_observations.py tests/test_ingestion.py tests/test_silver_transformations.py -v`: **31 passed in 1.25s**.
+- Data: Synthetic mock error fixtures and isolated test suite. No production S3/MinIO writes or network requests made.
+- Limits: `tests/test_runtime.py` requires optional dependency `geopandas` not installed in local environment (unrelated to S3 error handling). Full live pipeline execution unchanged.
+- Next step: Ready to commit and push to branch or continue with CART ML dataset preparation (ID 21–23).
+
+## PR #5 Merge Review Remediation (Gold ETL & DWH Loading) — 2026-10-16
+
+- Related work: workbook IDs 8, 9, 10, 16, 18 (`Open-Meteo/Meteostat Ingestion, Silver ETL, Gold Curation & DWH Loading`), PR #5 review findings.
+- Objective/scope: Resolve all 6 technical defects (4 P1s, 2 P2s), add regression test suite, reconcile calendar key documentation across domain contracts, translate Vietnamese progress report to English, and eliminate whitespace/formatting defects.
+- Changes:
+  - `scripts/transform_meteostat_to_silver.py`, `scripts/transform_open_meteo_to_silver.py`, `scripts/ingest_meteostat.py`, `scripts/ingest_open_meteo.py`: Fixed `is_s3_not_found_error` to directly inspect authoritative error code attribute (`NoSuchKey`, `NoSuchBucket`, `NoSuchObject`, `ResourceNotFound`) and HTTP 404 response status, removing substring matching on arbitrary message/request ID strings. Re-raise retryable server errors.
+  - `scripts/load_gold_observations.py`:
+    - Added `SilverReadError` and proper S3 `NoSuchKey` handling to prevent swallowing Silver read/Parquet parse errors, blocking publication and recording failed keys in `stats['failures']`.
+    - Added location merge in `save_gold_parquet` to preserve unaffected locations during location-filtered reruns.
+    - Added strict validation for identical vs conflicting duplicates; identical duplicates collapse cleanly, conflicting duplicates on observation grain reject publication with descriptive error and record failure.
+    - Added transactional rollback (`conn.rollback()`) on SQL error between months, preventing connection abortion from cascading.
+    - Added UTC timestamp timezone-awareness and exact hourly grid validation (`minute == second == microsecond == nanosecond == 0`), and deterministic local timestamp derivation from canonical UTC using `Asia/Ho_Chi_Minh`.
+  - `tests/test_silver_transformations.py`: Updated `S3Error` constructors to match pinned `minio==7.2.7` library signature `S3Error(code, message, resource, request_id, host_id, response, ...)`, and added test for S3Error with '404' in request ID.
+  - `tests/test_review_regressions.py`: Authored comprehensive regression test suite covering all 6 review defects (unit and integration tests).
+  - `docs/data-contract.md` & `docs/warehouse-schema.md`: Reconciled calendar key basis, confirming Vietnam Local Time (`Asia/Ho_Chi_Minh`, UTC+7) for `date_key` (YYYYMMDD) and `time_key` (HH00) derived deterministically from canonical `timestamp_utc`.
+  - `bao_cao_tien_do_du_an.md`: Translated complete report into English to comply with repository documentation language rule, and removed trailing whitespace.
+- Checks:
+  - `ruff check scripts dags tests`: PASS (all checks passed).
+  - `ruff format --check scripts dags tests`: PASS (all files formatted).
+  - `docker run --rm --network none weather-tests:2.9.3-python3.10 -m 'not integration'`: PASS (43 passed, 8 deselected).
+  - `docker compose -p weather-tests -f docker-compose.test.yml up --abort-on-container-exit --exit-code-from tests tests`: PASS (8 passed, 43 deselected).
+- Data: Synthetic test fixtures and Docker test services (PostgreSQL 16, MinIO); existing MinIO Lakehouse and PostgreSQL DW data preserved.
+- Evidence: Regression test suite in `tests/test_review_regressions.py`.
+- Limits: CDS/ERA5 API ingestion and regional boundary GeoJSON remain open pending external access.
+- Next step: Ready for PR #5 re-review and merge into `main`.
+
+## PR #5 Re-Review Remediations (Gold ETL & DWH Loading) — 2026-10-17
+
+- Related work: workbook IDs 16 (`Silver → Gold`) and 18 (`Observation fact loading`), PR #5 re-review findings on branch `feat/gold-etl-and-dwh-loading`.
+- Objective/scope: Resolve 4 specific re-review findings:
+  1. [P1] Treat missing Silver object (`S3Error` / `NoSuchKey`) on already-listed keys during read as fatal error, raising `SilverReadError` with key details and failing batch curation/publication instead of skipping (`continue`).
+  2. [P2] In DWH loading, enforce complete calendar-month scope deletion (`[month_start_utc, next_month_start_utc)`) scoped to rerun locations, ensuring retracted Silver rows are cleanly removed from both Gold Parquet and PostgreSQL DWH without leaking into other locations or leaving orphaned records.
+  3. [P2] Validate timestamp timezone awareness on incoming Silver data before UTC conversion, rejecting naive timestamps with explicit `ValueError`.
+  4. [P2] Strictly validate month boundaries during monthly curation, rejecting any aware timestamps outside `[month_start_utc, next_month_start_utc)` with explicit `ValueError`.
+- Changes:
+  - `scripts/load_gold_observations.py`:
+    - Replaced silent `continue` with `raise SilverReadError(...)` when reading listed Silver objects.
+    - Added timezone-naive check via `pd.to_datetime(ts_series, utc=False)` inspecting `tzinfo` before UTC conversion.
+    - Added out-of-month check rejecting timestamps before `month_start_utc` or on/after `next_month_start_utc`.
+    - Corrected month-boundary range in DWH loading deletion to cover the full calendar month `[month_start_utc, next_month_start_utc)`.
+  - `tests/test_review_regressions.py`:
+    - Added 4 dedicated regression probe tests:
+      - `test_s3_error_no_such_key_on_listed_silver_object_blocks_publication`
+      - `test_rereview_naive_timestamp_rejected`
+      - `test_rereview_out_of_month_aware_timestamp_rejected`
+      - `test_rereview_retracted_silver_row_removed_from_gold_and_dw` (integration).
+- Checks:
+  - `python -m ruff check scripts dags tests`: PASS (all checks passed).
+  - `python -m ruff format --check scripts dags tests`: PASS (21 files formatted).
+  - `python -m pytest tests/test_review_regressions.py -m "not integration"`: PASS (7 passed, 3 deselected).
+- Data scope: Isolated mock objects and synthetic test DataFrames. No production MinIO data or PostgreSQL DW facts modified.
+- Limits: Integration probe `test_rereview_retracted_silver_row_removed_from_gold_and_dw` requires active test docker containers (`pg-test` and `minio-test`).
+- Next step: All code and unit regression tests passed; ready for final review and PR merge.

@@ -19,7 +19,7 @@ The DDL does not seed `dim_date`/`dim_station` and does not include `DimModel`, 
 ## Grain and keys
 
 - Required observation grain: one source × one research point × one UTC hour.
-- Existing constraint: UNIQUE `(date_key, time_key, location_key, source_key)`. It matches the time grain only if date/time keys use the same calendar basis and map consistently to `timestamp_utc`.
+- Existing constraint: UNIQUE `(date_key, time_key, location_key, source_key)`. `date_key` (YYYYMMDD) and `time_key` (HH00) use Vietnam Local Time (`Asia/Ho_Chi_Minh`, UTC+7), derived deterministically from canonical `timestamp_utc`.
 - Proposed direct business key: `(source_key, location_key, timestamp_utc)`. This is not an existing constraint; migration and consumer checks are required before changing it.
 - Surrogate keys support dimension/fact joins; business keys support lookups/upserts. Do not use `created_at` as an observation key.
 - Multiple stations per source/location/hour require selection/aggregation before loading, or a separate station-grain fact if all stations are retained. `station_key` must not silently expand the current grain.
@@ -28,13 +28,13 @@ The DDL does not seed `dim_date`/`dim_station` and does not include `DimModel`, 
 
 | Item | Current state | Decision/implementation needed |
 | --- | --- | --- |
-| Calendar basis | Unspecified in DDL; the Gold sample used local time | Agree UTC/local date/time keys and additional roles/views if needed |
-| Date dimension | DDL exists, no seed | Cover the required dates and agree weekday conventions |
+| Calendar basis | Resolved: Vietnam Local Time (`Asia/Ho_Chi_Minh`, UTC+7) | `date_key` (YYYYMMDD) and `time_key` (HH00) derived deterministically from `timestamp_utc` |
+| Date dimension | Seeded (2016–2026) | 4,018 daily records seeded via `scripts/seed_dimensions.py` |
 | Boundaries | One `province` column | Old/new province mapping, codes, version/effective dates; SCD2 if history is required |
 | Stations | Globally unique `station_id` | Verify source-specific namespaces, distance mapping, and selection rules |
 | Prediction grain | No unique key or UTC origin/target window | Location × origin × horizon × model version, plus source/scenario when needed |
 | Models | Fact stores name/version | Design `dim_model` and appropriate artifact metadata |
-| Loader | Not implemented | Dimensions first, staging/transactions/upserts, and rerun verification |
+| Loader | Implemented and verified | `scripts/load_gold_observations.py` performs idempotent transactional upsert with rollback on failure |
 
 `predicted_at` is currently a TIMESTAMP row-creation time, not forecast origin. One `target_date_key` cannot represent every rolling 24-hour window. Probability/threshold/label version and UTC target start/end require design during ML integration.
 

@@ -20,6 +20,7 @@ import os
 import sys
 import time
 from datetime import datetime, timezone
+from typing import Any
 
 import requests
 from minio import Minio
@@ -128,6 +129,28 @@ def get_minio_client() -> Minio:
         return client
 
 
+def is_s3_not_found_error(err: Any) -> bool:
+    """Return True if the error corresponds to an S3 'NoSuchKey' / HTTP 404 (object missing).
+
+    Checks authoritative S3 error code or HTTP response status 404.
+    Does NOT match arbitrary substrings in messages, resources, or request IDs.
+    """
+    if err is None:
+        return False
+
+    code = getattr(err, "code", None)
+    if code in ("NoSuchKey", "NoSuchBucket", "NoSuchObject", "ResourceNotFound"):
+        return True
+
+    resp = getattr(err, "response", None)
+    if resp is not None:
+        status = getattr(resp, "status", getattr(resp, "status_code", None))
+        if status == 404:
+            return True
+
+    return False
+
+
 def fetch_open_meteo_year(lat: float, lon: float, year: int, max_retries: int = 5) -> dict:
     """Gửi request tới Open-Meteo Archive API để lấy dữ liệu 1 năm của 1 tọa độ"""
     start_date = f"{year}-01-01"
@@ -226,12 +249,15 @@ def ingest_data(
                     stat = client.stat_object(BUCKET_BRONZE, object_path)
                     if stat.size > 2000:
                         print(
-                            f"  [{current_idx}/{total_tasks}] (Split: {split_type.upper():<10}) {object_path} -> ĐÃ CÓ ({stat.size} bytes), bỏ qua."
+                            f"  [{current_idx}/{total_tasks}] (Split: {split_type.upper():<10}) {object_path} -> EXISTS ({stat.size} bytes), skipping."
                         )
                         skipped_count += 1
                         continue
-                except S3Error:
-                    pass
+                except S3Error as s3_err:
+                    if is_s3_not_found_error(s3_err):
+                        pass
+                    else:
+                        raise
 
             print(
                 f"  [{current_idx}/{total_tasks}] (Split: {split_type.upper():<10}) Đang tải {loc_code} năm {year} ...",
