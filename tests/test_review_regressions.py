@@ -7,6 +7,12 @@ Defects tested:
 4. Conflicting duplicates rejected while identical duplicates collapse cleanly
 5. SQL transaction recovery via rollback between months
 6. UTC-to-local deterministic derivation and grid validation
+
+Re-review probes (PR #5 re-review, 2026-10-17):
+7. S3Error NoSuchKey on already-listed Silver object blocks publication (SilverReadError)
+8. Retracted Silver rows removed from both Gold and DW on location-filtered rerun
+9. Naive timestamp (no tzinfo) rejected before UTC normalization
+10. Out-of-month aware timestamp rejected during month curation
 """
 
 import io
@@ -545,3 +551,366 @@ def test_sql_transaction_recovery_on_failed_month(pg_connection):
             "SELECT count(*) FROM fact_weather_observation WHERE date_key = 20240801 AND time_key = 0;"
         )
         assert cur.fetchone()[0] == 1
+
+
+# ---------------------------------------------------------------------------
+# Re-review Probe 1: S3Error NoSuchKey on listed Silver object blocks curation
+# ---------------------------------------------------------------------------
+def test_rereview_nosuchkey_during_read_raises_silver_read_error():
+    """list_objects returns good.parquet and missing.parquet.
+
+    Reading missing.parquet raises S3Error('NoSuchKey') -> must raise SilverReadError,
+    not skip the file and return an incomplete dataset.
+    """
+    # Prepare a valid Parquet buffer for good.parquet
+    df_good = pd.DataFrame(
+        [
+            {
+                "source_name": "Open-Meteo",
+                "location_code": "HAN",
+                "timestamp_utc": pd.Timestamp("2024-09-01 10:00:00", tz="UTC"),
+                "temperature_c": 30.0,
+                "humidity_percent": 70.0,
+                "precipitation_mm": 0.0,
+            }
+        ]
+    )
+    buf_good = io.BytesIO()
+    df_good.to_parquet(buf_good, index=False)
+    good_bytes = buf_good.getvalue()
+
+    nosuchkey_err = S3Error(
+        "NoSuchKey",
+        "The specified key does not exist.",
+        "silver/weather_hourly/year=2024/month=09/missing.parquet",
+        "req-id-001",
+        "host-id-001",
+        None,
+    )
+
+    # Two listed objects
+    mock_obj_good = Mock()
+    mock_obj_good.object_name = "weather_hourly/year=2024/month=09/good.parquet"
+    mock_obj_missing = Mock()
+    mock_obj_missing.object_name = "weather_hourly/year=2024/month=09/missing.parquet"
+
+    mock_minio = Mock()
+    mock_minio.list_objects.return_value = [mock_obj_good, mock_obj_missing]
+
+    def _get_object(_bucket, key):
+        if "good" in key:
+            return SimpleNamespace(
+                read=lambda: good_bytes,
+                close=lambda: None,
+                release_conn=lambda: None,
+            )
+        raise nosuchkey_err
+
+    mock_minio.get_object.side_effect = _get_object
+
+    loc_map = {"HAN": 1}
+    source_map = {"Open-Meteo": 1}
+    station_map = {}
+
+    with pytest.raises(gold_obs.SilverReadError) as exc_info:
+        gold_obs.process_month_observations(
+            minio_client=mock_minio,
+            year=2024,
+            month=9,
+            loc_map=loc_map,
+            source_map=source_map,
+            station_map=station_map,
+        )
+
+    assert "missing.parquet" in exc_info.value.key
+    assert isinstance(exc_info.value.original_error, S3Error)
+
+
+# ---------------------------------------------------------------------------
+# Re-review Probe 3: Naive timestamp rejected
+# ---------------------------------------------------------------------------
+def test_rereview_naive_timestamp_rejected():
+    """Naive timestamp '2024-09-01 16:00:00' (no tz) in Silver must fail validation."""
+    df_naive = pd.DataFrame(
+        [
+            {
+                "source_name": "Open-Meteo",
+                "location_code": "HAN",
+                # Naive datetime — no timezone info
+                "timestamp_utc": pd.Timestamp("2024-09-01 16:00:00"),
+                "temperature_c": 30.0,
+            }
+        ]
+    )
+    buf = io.BytesIO()
+    df_naive.to_parquet(buf, index=False)
+    naive_bytes = buf.getvalue()
+
+    mock_minio = Mock()
+    mock_obj = Mock()
+    mock_obj.object_name = "weather_hourly/year=2024/month=09/naive.parquet"
+    mock_minio.list_objects.return_value = [mock_obj]
+    mock_minio.get_object.return_value = SimpleNamespace(
+        read=lambda: naive_bytes, close=lambda: None, release_conn=lambda: None
+    )
+
+    loc_map = {"HAN": 1}
+    source_map = {"Open-Meteo": 1}
+    station_map = {}
+
+    with pytest.raises(ValueError, match="timezone-naive"):
+        gold_obs.process_month_observations(
+            minio_client=mock_minio,
+            year=2024,
+            month=9,
+            loc_map=loc_map,
+            source_map=source_map,
+            station_map=station_map,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Re-review Probe 4: Out-of-month aware timestamp rejected
+# ---------------------------------------------------------------------------
+def test_rereview_out_of_month_aware_timestamp_rejected():
+    """Aware timestamp 2024-10-01T00:00:00Z during 2024-09 curation must fail validation."""
+    df_out_of_month = pd.DataFrame(
+        [
+            {
+                "source_name": "Open-Meteo",
+                "location_code": "HAN",
+                # October 1st 00:00 UTC — not in September
+                "timestamp_utc": pd.Timestamp("2024-10-01 00:00:00", tz="UTC"),
+                "temperature_c": 28.0,
+            }
+        ]
+    )
+    buf = io.BytesIO()
+    df_out_of_month.to_parquet(buf, index=False)
+    oom_bytes = buf.getvalue()
+
+    mock_minio = Mock()
+    mock_obj = Mock()
+    mock_obj.object_name = "weather_hourly/year=2024/month=09/october_leak.parquet"
+    mock_minio.list_objects.return_value = [mock_obj]
+    mock_minio.get_object.return_value = SimpleNamespace(
+        read=lambda: oom_bytes, close=lambda: None, release_conn=lambda: None
+    )
+
+    loc_map = {"HAN": 1}
+    source_map = {"Open-Meteo": 1}
+    station_map = {}
+
+    with pytest.raises(ValueError, match="outside the requested UTC month"):
+        gold_obs.process_month_observations(
+            minio_client=mock_minio,
+            year=2024,
+            month=9,
+            loc_map=loc_map,
+            source_map=source_map,
+            station_map=station_map,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Re-review Probe 2: Retracted Silver row removed from Gold and DW
+# ---------------------------------------------------------------------------
+@pytest.mark.integration
+def test_rereview_retracted_silver_row_removed_from_gold_and_dw(minio_client, pg_connection):
+    """Publish HAN@16:00, HAN@17:00, PTO@16:00.  Remove HAN@17:00 from Silver, rerun HAN.
+
+    After rerun, both Gold and DW must contain exactly 2 keys:
+    HAN@16:00 and PTO@16:00.  HAN@17:00 must be gone from both sinks.
+    """
+    from datetime import datetime as dt
+    from datetime import timezone as tz
+
+    # Seed dim_date for the two local dates:
+    # 2024-09-01 16:00 UTC = 2024-09-01 23:00 local -> date_key 20240901
+    # 2024-09-01 17:00 UTC = 2024-09-02 00:00 local -> date_key 20240902
+    with pg_connection.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO dim_date (
+                date_key, full_date, day_of_week, day_name, day_of_month,
+                month, month_name, quarter, year, is_weekend, is_rainy_season
+            ) VALUES
+                (20240901, '2024-09-01', 7, 'Chủ Nhật', 1, 9, 'Tháng 9', 3, 2024, true, true),
+                (20240902, '2024-09-02', 1, 'Thứ Hai', 2, 9, 'Tháng 9', 3, 2024, false, true)
+            ON CONFLICT (date_key) DO NOTHING;
+            """
+        )
+    pg_connection.commit()
+
+    # --- Phase 1: Publish all 3 observations ---
+    df_all = pd.DataFrame(
+        [
+            {
+                "date_key": 20240901,
+                "time_key": 2300,  # 16:00 UTC -> 23:00 local
+                "location_key": 1,  # HAN
+                "source_key": 1,  # Open-Meteo
+                "station_key": None,
+                "location_code": "HAN",
+                "source_name": "Open-Meteo",
+                "timestamp_utc": pd.Timestamp("2024-09-01 16:00:00", tz="UTC"),
+                "timestamp_local": pd.Timestamp("2024-09-01 23:00:00"),
+                "temperature_c": 28.0,
+                "humidity_percent": 80.0,
+                "precipitation_mm": 0.0,
+                "wind_speed_ms": 2.0,
+                "wind_direction_deg": 90.0,
+                "pressure_hpa": 1010.0,
+                "cloud_cover_percent": 20.0,
+                "solar_radiation_wm2": 0.0,
+            },
+            {
+                "date_key": 20240902,
+                "time_key": 0,  # 17:00 UTC -> 00:00 local
+                "location_key": 1,  # HAN
+                "source_key": 1,
+                "station_key": None,
+                "location_code": "HAN",
+                "source_name": "Open-Meteo",
+                "timestamp_utc": pd.Timestamp("2024-09-01 17:00:00", tz="UTC"),
+                "timestamp_local": pd.Timestamp("2024-09-02 00:00:00"),
+                "temperature_c": 27.0,
+                "humidity_percent": 82.0,
+                "precipitation_mm": 1.0,
+                "wind_speed_ms": 1.5,
+                "wind_direction_deg": 100.0,
+                "pressure_hpa": 1009.0,
+                "cloud_cover_percent": 40.0,
+                "solar_radiation_wm2": 0.0,
+            },
+            {
+                "date_key": 20240901,
+                "time_key": 2300,
+                "location_key": 2,  # PTO
+                "source_key": 1,
+                "station_key": None,
+                "location_code": "PTO",
+                "source_name": "Open-Meteo",
+                "timestamp_utc": pd.Timestamp("2024-09-01 16:00:00", tz="UTC"),
+                "timestamp_local": pd.Timestamp("2024-09-01 23:00:00"),
+                "temperature_c": 26.0,
+                "humidity_percent": 75.0,
+                "precipitation_mm": 0.0,
+                "wind_speed_ms": 1.0,
+                "wind_direction_deg": 80.0,
+                "pressure_hpa": 1011.0,
+                "cloud_cover_percent": 10.0,
+                "solar_radiation_wm2": 0.0,
+            },
+        ]
+    )
+
+    gold_obs.save_gold_parquet(
+        minio_client=minio_client, df=df_all, year=2024, month=9, overwrite=True
+    )
+    gold_obs.load_dwh_fact_observations(
+        pg_connection,
+        df_all,
+        source_keys=[1],
+        location_keys=[1, 2],
+        month_start_utc=dt(2024, 9, 1, tzinfo=tz.utc),
+        next_month_start_utc=dt(2024, 10, 1, tzinfo=tz.utc),
+    )
+
+    # Verify initial state: 3 rows in DW
+    with pg_connection.cursor() as cur:
+        cur.execute(
+            """
+            SELECT count(*) FROM fact_weather_observation
+            WHERE timestamp_utc >= '2024-09-01T00:00:00Z'
+              AND timestamp_utc < '2024-10-01T00:00:00Z';
+            """
+        )
+        assert cur.fetchone()[0] == 3
+
+    # --- Phase 2: Rerun for HAN only, with HAN@17:00 removed ---
+    df_han_rerun = pd.DataFrame(
+        [
+            {
+                "date_key": 20240901,
+                "time_key": 2300,
+                "location_key": 1,
+                "source_key": 1,
+                "station_key": None,
+                "location_code": "HAN",
+                "source_name": "Open-Meteo",
+                "timestamp_utc": pd.Timestamp("2024-09-01 16:00:00", tz="UTC"),
+                "timestamp_local": pd.Timestamp("2024-09-01 23:00:00"),
+                "temperature_c": 28.0,
+                "humidity_percent": 80.0,
+                "precipitation_mm": 0.0,
+                "wind_speed_ms": 2.0,
+                "wind_direction_deg": 90.0,
+                "pressure_hpa": 1010.0,
+                "cloud_cover_percent": 20.0,
+                "solar_radiation_wm2": 0.0,
+            }
+        ]
+    )
+
+    # Gold: merge with filter so PTO is preserved
+    gold_obs.save_gold_parquet(
+        minio_client=minio_client,
+        df=df_han_rerun,
+        year=2024,
+        month=9,
+        overwrite=True,
+        location_filter="HAN",
+    )
+    # DW: transactional retraction scoped to HAN only
+    gold_obs.load_dwh_fact_observations(
+        pg_connection,
+        df_han_rerun,
+        source_keys=[1],
+        location_keys=[1],  # HAN only
+        month_start_utc=dt(2024, 9, 1, tzinfo=tz.utc),
+        next_month_start_utc=dt(2024, 10, 1, tzinfo=tz.utc),
+    )
+
+    # --- Phase 3: Verify Gold Parquet ---
+    gold_key = "fact_weather_observation/year=2024/month=09/fact_weather_observation_202409.parquet"
+    resp = minio_client.get_object("gold", gold_key)
+    try:
+        df_gold = pd.read_parquet(io.BytesIO(resp.read()))
+    finally:
+        resp.close()
+        resp.release_conn()
+
+    assert len(df_gold) == 2, f"Expected 2 rows in Gold, got {len(df_gold)}"
+    gold_keys = set(
+        zip(
+            df_gold["location_code"],
+            df_gold["timestamp_utc"].astype(str),
+        )
+    )
+    assert ("HAN", "2024-09-01 16:00:00+00:00") in gold_keys
+    assert ("PTO", "2024-09-01 16:00:00+00:00") in gold_keys
+    # HAN@17:00 must be gone
+    assert ("HAN", "2024-09-01 17:00:00+00:00") not in gold_keys
+
+    # --- Phase 4: Verify DW ---
+    with pg_connection.cursor() as cur:
+        cur.execute(
+            """
+            SELECT l.location_code, f.timestamp_utc
+            FROM fact_weather_observation f
+            JOIN dim_location l ON f.location_key = l.location_key
+            WHERE f.timestamp_utc >= '2024-09-01T00:00:00Z'
+              AND f.timestamp_utc < '2024-10-01T00:00:00Z'
+            ORDER BY l.location_code, f.timestamp_utc;
+            """
+        )
+        dw_rows = cur.fetchall()
+
+    # Exactly 2 rows: HAN@16:00, PTO@16:00
+    assert len(dw_rows) == 2, f"Expected 2 rows in DW, got {len(dw_rows)}: {dw_rows}"
+    dw_keys = {(row[0], row[1].strftime("%Y-%m-%dT%H:%M:%SZ")) for row in dw_rows}
+    assert ("HAN", "2024-09-01T16:00:00Z") in dw_keys
+    assert ("PTO", "2024-09-01T16:00:00Z") in dw_keys
+    # HAN@17:00 must be retracted
+    assert ("HAN", "2024-09-01T17:00:00Z") not in dw_keys

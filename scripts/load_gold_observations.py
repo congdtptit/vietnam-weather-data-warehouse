@@ -11,6 +11,7 @@ According to docs/warehouse-schema.md, docs/data-contract.md, and docs/NAMING_CO
 """
 
 import argparse
+import calendar
 import io
 import json
 import os
@@ -210,9 +211,8 @@ def process_month_observations(
             if not df_part.empty:
                 dfs.append(df_part)
         except S3Error as s3_err:
-            if is_s3_not_found_error(s3_err):
-                print(f"  [-] Silver file not found: {obj.object_name}")
-                continue
+            # Any S3Error (including NoSuchKey) on an already-listed object
+            # indicates an inconsistent snapshot.  Block the entire month.
             raise SilverReadError(obj.object_name, s3_err) from s3_err
         except Exception as e:
             raise SilverReadError(obj.object_name, e) from e
@@ -237,6 +237,43 @@ def process_month_observations(
         raise ValueError(
             f"Month {year}-{m_str}: 'timestamp_utc' column missing from Silver observations."
         )
+
+    # --- Finding 3 (P2): Reject timezone-naive timestamps before UTC normalization ---
+    ts_series = combined_df["timestamp_utc"]
+    if hasattr(ts_series, "dt") and pd.api.types.is_datetime64_any_dtype(ts_series):
+        # Already a datetime dtype — reject if naive (no tz).
+        if ts_series.dt.tz is None:
+            raise ValueError(
+                f"Month {year}-{m_str}: 'timestamp_utc' column contains timezone-naive "
+                f"datetime values. All Silver timestamps must carry explicit timezone metadata."
+            )
+    else:
+        # Strings/objects: parse WITHOUT automatic UTC localization first.
+        try:
+            parsed_check = pd.to_datetime(ts_series, utc=False)
+        except Exception as e:
+            raise ValueError(f"Month {year}-{m_str}: Failed to parse 'timestamp_utc': {e}") from e
+        # Check that every non-null parsed value has tzinfo.
+        non_null = parsed_check.dropna()
+        if not non_null.empty:
+            if hasattr(non_null, "dt") and pd.api.types.is_datetime64_any_dtype(non_null):
+                # Uniform dtype: tz is either all-present or all-absent.
+                if non_null.dt.tz is None:
+                    samples = non_null.head(3).tolist()
+                    raise ValueError(
+                        f"Month {year}-{m_str}: 'timestamp_utc' contains timezone-naive "
+                        f"timestamps. All values must carry explicit timezone metadata. "
+                        f"Samples: {samples}"
+                    )
+            else:
+                # Object dtype with mixed types — check element-by-element.
+                for idx, val in non_null.items():
+                    if hasattr(val, "tzinfo") and val.tzinfo is None:
+                        raise ValueError(
+                            f"Month {year}-{m_str}: 'timestamp_utc' contains timezone-naive "
+                            f"timestamp at index {idx}: {val!r}. All Silver timestamps must "
+                            f"carry explicit timezone metadata."
+                        )
 
     try:
         combined_df["timestamp_utc"] = pd.to_datetime(combined_df["timestamp_utc"], utc=True)
@@ -263,6 +300,25 @@ def process_month_observations(
         samples = combined_df.loc[off_grid_mask, "timestamp_utc"].head(3).tolist()
         raise ValueError(
             f"Month {year}-{m_str}: Found {off_grid_count} off-grid UTC timestamps (expected HH:00:00). "
+            f"Samples: {samples}"
+        )
+
+    # --- Finding 4 (P2): Validate that all records fall within the requested UTC month ---
+    month_start_utc = pd.Timestamp(year=year, month=month, day=1, tz="UTC")
+    _, last_day = calendar.monthrange(year, month)
+    if month == 12:
+        next_month_start_utc = pd.Timestamp(year=year + 1, month=1, day=1, tz="UTC")
+    else:
+        next_month_start_utc = pd.Timestamp(year=year, month=month + 1, day=1, tz="UTC")
+    out_of_month_mask = (combined_df["timestamp_utc"] < month_start_utc) | (
+        combined_df["timestamp_utc"] >= next_month_start_utc
+    )
+    if out_of_month_mask.any():
+        oom_count = int(out_of_month_mask.sum())
+        samples = combined_df.loc[out_of_month_mask, "timestamp_utc"].head(3).tolist()
+        raise ValueError(
+            f"Month {year}-{m_str}: Found {oom_count} records with timestamps outside the "
+            f"requested UTC month [{month_start_utc}, {next_month_start_utc}). "
             f"Samples: {samples}"
         )
 
@@ -470,8 +526,23 @@ def save_gold_parquet(
     return gold_key
 
 
-def load_dwh_fact_observations(conn, df: pd.DataFrame) -> int:
-    """Insert or upsert fact observations into PostgreSQL fact_weather_observation table."""
+def load_dwh_fact_observations(
+    conn,
+    df: pd.DataFrame,
+    source_keys: list[int] | None = None,
+    location_keys: list[int] | None = None,
+    month_start_utc: datetime | None = None,
+    next_month_start_utc: datetime | None = None,
+) -> int:
+    """Insert or upsert fact observations into PostgreSQL fact_weather_observation table.
+
+    When scope parameters (source_keys, location_keys, month_start_utc,
+    next_month_start_utc) are all provided, the function transactionally
+    deletes any existing rows within that exact scope whose grain keys are
+    no longer present in the incoming dataset, then upserts the incoming
+    rows.  This ensures retracted Silver rows are consistently removed from
+    the DW.
+    """
     if df.empty:
         return 0
 
@@ -519,8 +590,49 @@ def load_dwh_fact_observations(conn, df: pd.DataFrame) -> int:
             timestamp_local = EXCLUDED.timestamp_local;
     """
 
+    # Build the set of grain keys present in the incoming dataset
+    incoming_grains: set[tuple[int, int, int, int]] = set()
+    for rec in records:
+        # rec layout: (date_key, time_key, location_key, source_key, ...)
+        incoming_grains.add((rec[0], rec[1], rec[2], rec[3]))
+
     try:
         with conn.cursor() as cur:
+            # --- Finding 2 (P1): Transactionally delete retracted rows ---
+            # Only when all scope parameters are supplied, delete rows within
+            # the verified scope whose keys no longer appear in the curated data.
+            scope_provided = all(
+                v is not None
+                for v in [source_keys, location_keys, month_start_utc, next_month_start_utc]
+            )
+            if scope_provided:
+                # Fetch existing grain keys within the verified scope
+                cur.execute(
+                    """
+                    SELECT date_key, time_key, location_key, source_key
+                    FROM fact_weather_observation
+                    WHERE source_key = ANY(%s)
+                      AND location_key = ANY(%s)
+                      AND timestamp_utc >= %s
+                      AND timestamp_utc < %s;
+                    """,
+                    (source_keys, location_keys, month_start_utc, next_month_start_utc),
+                )
+                existing_grains = {tuple(row) for row in cur.fetchall()}
+                retracted = existing_grains - incoming_grains
+                if retracted:
+                    for grain in retracted:
+                        cur.execute(
+                            """
+                            DELETE FROM fact_weather_observation
+                            WHERE date_key = %s
+                              AND time_key = %s
+                              AND location_key = %s
+                              AND source_key = %s;
+                            """,
+                            grain,
+                        )
+
             execute_values(cur, upsert_sql, records, page_size=2500)
         conn.commit()
     except Exception:
@@ -634,11 +746,31 @@ def run_gold_pipeline(
                         )
                         continue
 
-                # 3. Load into PostgreSQL DWH
+                # 3. Load into PostgreSQL DWH (with transactional retraction)
                 dwh_loaded = 0
                 if not skip_dwh:
+                    # Compute the verified scope for retraction reconciliation
+                    scope_source_keys = sorted(
+                        df_month["source_key"].dropna().astype(int).unique().tolist()
+                    )
+                    scope_location_keys = sorted(
+                        df_month["location_key"].dropna().astype(int).unique().tolist()
+                    )
+                    scope_month_start = datetime(year, month, 1, tzinfo=timezone.utc)
+                    _, scope_last_day = calendar.monthrange(year, month)
+                    if month == 12:
+                        scope_next_month_start = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+                    else:
+                        scope_next_month_start = datetime(year, month + 1, 1, tzinfo=timezone.utc)
                     try:
-                        dwh_loaded = load_dwh_fact_observations(conn, df_month)
+                        dwh_loaded = load_dwh_fact_observations(
+                            conn,
+                            df_month,
+                            source_keys=scope_source_keys,
+                            location_keys=scope_location_keys,
+                            month_start_utc=scope_month_start,
+                            next_month_start_utc=scope_next_month_start,
+                        )
                         stats["total_dwh_upserted"] += dwh_loaded
                     except Exception as e:
                         if conn:

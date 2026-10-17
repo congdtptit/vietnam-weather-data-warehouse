@@ -310,3 +310,31 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
 - Evidence: Regression test suite in `tests/test_review_regressions.py`.
 - Limits: CDS/ERA5 API ingestion and regional boundary GeoJSON remain open pending external access.
 - Next step: Ready for PR #5 re-review and merge into `main`.
+
+## PR #5 Re-Review Remediations (Gold ETL & DWH Loading) — 2026-10-17
+
+- Related work: workbook IDs 16 (`Silver → Gold`) and 18 (`Observation fact loading`), PR #5 re-review findings on branch `feat/gold-etl-and-dwh-loading`.
+- Objective/scope: Resolve 4 specific re-review findings:
+  1. [P1] Treat missing Silver object (`S3Error` / `NoSuchKey`) on already-listed keys during read as fatal error, raising `SilverReadError` with key details and failing batch curation/publication instead of skipping (`continue`).
+  2. [P2] In DWH loading, enforce complete calendar-month scope deletion (`[month_start_utc, next_month_start_utc)`) scoped to rerun locations, ensuring retracted Silver rows are cleanly removed from both Gold Parquet and PostgreSQL DWH without leaking into other locations or leaving orphaned records.
+  3. [P2] Validate timestamp timezone awareness on incoming Silver data before UTC conversion, rejecting naive timestamps with explicit `ValueError`.
+  4. [P2] Strictly validate month boundaries during monthly curation, rejecting any aware timestamps outside `[month_start_utc, next_month_start_utc)` with explicit `ValueError`.
+- Changes:
+  - `scripts/load_gold_observations.py`:
+    - Replaced silent `continue` with `raise SilverReadError(...)` when reading listed Silver objects.
+    - Added timezone-naive check via `pd.to_datetime(ts_series, utc=False)` inspecting `tzinfo` before UTC conversion.
+    - Added out-of-month check rejecting timestamps before `month_start_utc` or on/after `next_month_start_utc`.
+    - Corrected month-boundary range in DWH loading deletion to cover the full calendar month `[month_start_utc, next_month_start_utc)`.
+  - `tests/test_review_regressions.py`:
+    - Added 4 dedicated regression probe tests:
+      - `test_s3_error_no_such_key_on_listed_silver_object_blocks_publication`
+      - `test_rereview_naive_timestamp_rejected`
+      - `test_rereview_out_of_month_aware_timestamp_rejected`
+      - `test_rereview_retracted_silver_row_removed_from_gold_and_dw` (integration).
+- Checks:
+  - `python -m ruff check scripts dags tests`: PASS (all checks passed).
+  - `python -m ruff format --check scripts dags tests`: PASS (21 files formatted).
+  - `python -m pytest tests/test_review_regressions.py -m "not integration"`: PASS (7 passed, 3 deselected).
+- Data scope: Isolated mock objects and synthetic test DataFrames. No production MinIO data or PostgreSQL DW facts modified.
+- Limits: Integration probe `test_rereview_retracted_silver_row_removed_from_gold_and_dw` requires active test docker containers (`pg-test` and `minio-test`).
+- Next step: All code and unit regression tests passed; ready for final review and PR merge.
