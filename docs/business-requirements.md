@@ -13,6 +13,7 @@ Version 0.1, 2026-10-10. This document translates the proposal and task allocati
 | [Rain label](rain-label.md) | Labels, features, splits, and CART evaluation | Identifies unresolved label decisions |
 | [Naming conventions](NAMING_CONVENTIONS.md) | Buckets, object keys, and partitions | Documents actual and target paths |
 | [Progress](progress.md) | Implementation and verification evidence | Determines what has actually been completed |
+| [Task specifications, weeks 2–5](task-specs-weeks-2-5.md) | Proposed business specifications for IDs 19, 20, 9, 17, 8, 4, 5 | Proposals until confirmed in the owning document |
 
 The workbook contains 40 tasks across 10 weeks. N1 covers infrastructure/ETL, N2 covers DW/BI, and N3 covers ERA5/ML. Read current owners and support assignments from the workbook when executing a task; this document does not maintain a second assignment or percentage tracker. Week 1 currently starts on **2026-10-12** in `Tổng quan!E11`. The workbook labels this as an editable assumption, not a confirmed deadline.
 

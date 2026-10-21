@@ -540,3 +540,36 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
   - 27 differ by more than 0.5 mm, including one `999.1` value.
   - Proposed rule: within 0.5 mm, keep the 0.1 mm-resolution value; otherwise quarantine; values ≥ 999 are invalid. Under that rule about 14,697 station-days are usable and 27 are quarantined.
 - No code, contract, or DW changes yet. The daily-rain table, its grain (source × station × UTC day ending 12:00), and the duplicate rule still need approval before implementation.
+
+## Business specifications for the next N1/N2 tasks — 2026-10-21
+
+- Related work: workbook IDs 19, 20, 9, 17, 8, 4, 5. Documentation only: new `docs/task-specs-weeks-2-5.md`, plus a source-table row in `docs/business-requirements.md`. No code, SQL, or data changes.
+- Research performed: read the business requirements, warehouse schema, architecture, DDL, and the DW/BI/ETL skills. Web sources consulted: Microsoft Learn (Power BI PostgreSQL connector), NCEI/NESDIS (ISD superseded by GHCNh; no ISD updates beyond 2025-08-24), ECMWF forum (CDS item limits and licence errors), and Resolution 202/2025/QH15 coverage (63 → 34 provinces).
+- Sampled 6 GHCNh files (`by-year/<YYYY>/psv/GHCNh_VMM000<WMO>_<YYYY>.psv`): 2025 for 48803, 48823, 48825, 48826, 48831, and 2024 for 48826. Results: 24-hour precipitation on 358–360 days in 2025, data through 2025-12-31, one value per day, no hourly precipitation. Phù Liễn 2024 total 2,112 mm, identical to ISD. The specification therefore proposes GHCNh instead of ISD for ID 9.
+- Verified versus unverified: four of the province mergers relevant to the research points were confirmed by search results (Phú Thọ + Vĩnh Phúc + Hòa Bình; Tuyên Quang + Hà Giang; Lào Cai + Yên Bái; Thái Nguyên + Bắc Kạn); Hải Dương into Hải Phòng was confirmed by Wikipedia. Ninh Bình + Hà Nam + Nam Định is unconfirmed. GeoJSON candidates, licences, and current CDS limits were not verified. Rainy-day (1 mm) and hot-day (35 °C) thresholds are proposals.
+- Update 2026-10-21 (ID 4): the N1/N2 member decided to use pre-merger (63-province) boundaries, because the study period is almost entirely before 2025-07-01. `docs/task-specs-weeks-2-5.md` §7 now records this decision, the conflict with workbook ID 4/ID 11 and the risk sheet (which ask for post-merger boundaries and old + new names), and the candidate sources (HDX COD-AB earlier version, geoBoundaries, GADM). Licenses were not verified. The workbook was not edited.
+
+## OLAP views (workbook ID 19) — 2026-10-21
+
+- Related work: workbook ID 19; `docs/task-specs-weeks-2-5.md` §2; `docs/warehouse-schema.md` aggregation rules. Thresholds were decided by the N1/N2 member: rainy day ≥ 1.0 mm and hot day ≥ 35.0 °C, both on complete local days.
+- Changes:
+  - New `sql/02_olap_views.sql` (idempotent `CREATE OR REPLACE VIEW`): `vw_obs_hourly`, `vw_obs_daily`, `vw_calendar_month`, `vw_obs_monthly`, `vw_obs_yearly`, `vw_coverage`. Local calendar (UTC+7).
+  - Rules: aggregates stay within one source × location; means roll up from sums and counts; wind direction uses a vector mean excluding calm or missing-direction hours; incomplete days give NULL flags; a month with no complete day gives NULL rainy/hot counts, not 0. Pressure is compared within one source only, because surface and sea-level pressure share a column.
+  - `sql/01_init_postgres.sh` applies the views to new databases and is now executable (mode 100755). `docker-compose.yml` mounts the view file. `Dockerfile` and `.dockerignore` copy it into the test image.
+  - New `tests/test_olap_views.py` (3 integration tests; synthetic March 2023; transaction rolled back). Covered: rain sum and inclusive 1 mm flag, hot flag, vector wind mean near north, incomplete day → NULL flag, missing Meteostat rain → NULL instead of 0, monthly mean from sums/counts, yearly = Σ monthly, and sources kept separate.
+- Pre-existing bug found and fixed: on this macOS Docker Desktop host, the postgres entrypoint tried to execute the non-executable `01_init_postgres.sh` and failed with `/bin/bash: bad interpreter: Permission denied`, which aborts first-time initialization. The original file from `HEAD` reproduced the failure, and `chmod +x` fixed it. This explains the half-initialized volume found earlier today (`airflow` database present, no `weather_dwh`).
+- Checks:
+  - `ruff check`/`format --check` passed (22 files); `bash -n` passed; `docker compose --env-file .env.example config --quiet` passed.
+  - `make test` → 61 passed, 12 deselected.
+  - `make test-integration` → 12 passed.
+  - Fresh throwaway `postgres:16-alpine` container (`--network none`) with the three mounts: initialization finished and created all 6 views.
+  - Live DW: views applied twice without error.
+- Real-data reconciliation (full DW, 788,861 rows):
+  - Row counts: hourly 701,376 + 87,485; daily 29,232 Open-Meteo + 3,654 Meteostat; monthly 968 + 121; yearly 88 + 11. The extra local day/month/year comes from the 2026-01-01 local boundary (7 hours).
+  - The hourly → daily → monthly → yearly chain against the fact table shows 0 difference in rain, row counts, temperature sums, and temperature counts for all 9 source × location series.
+  - Spot check, HAN Open-Meteo July 2024: direct SQL 541.30 mm and 27 rainy days, matching the monthly view.
+  - Coverage 2017–2025: Open-Meteo 100%; Meteostat HAN 99.55–99.97% records, 0% rain.
+  - Wind direction range 0.0–359.9 after fixing a rounding edge case that produced 360.0.
+  - Full-chain query 1.6 s; single views 0.15–0.8 s.
+- Observations: Open-Meteo averages 156–211 rainy days per location-year. Meteostat HAN shows 57 hot days in 2024 versus 23 for Open-Meteo at HAN (station maximum temperatures are higher than the grid).
+- Limits: no Power BI artifact yet (ID 20). Local-year boundary rows (2016 partial, 2026 = 7 hours) need a year filter in BI. Views are plain (not materialized); ID 26 owns tuning.

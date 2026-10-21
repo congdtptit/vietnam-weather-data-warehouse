@@ -11,6 +11,7 @@
 !dags/*.py
 !sql/
 !sql/init_dwh_schema.sql
+!sql/02_olap_views.sql
 !tests/
 !tests/**
 **/__pycache__/
