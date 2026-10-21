@@ -1,6 +1,6 @@
 # RainNext24h and Evaluation Methodology
 
-Version v0.2, 2026-10-21 (label decisions confirmed by the project member working on N1/N2 on 2026-10-21; that member accepted their confirmation as team approval). Original draft v0.1: 2026-10-08. The proposal requires CART classification of rain/no-rain within the next 24 hours. This document records established decisions and items requiring team agreement. Label generation and split purging are implemented in `scripts/rain_labels.py` (tests: `tests/test_rain_labels.py`) and exported to Gold ML by `scripts/export_rain_labels.py` (`gold/ml_labels/rain_next24h_labels_v1.parquet` with a JSON manifest). Exploratory analysis of the train split is in `notebooks/eda_rain_next24h.ipynb` (helpers: `scripts/rain_eda.py`). The feature dataset v1 is built by `scripts/build_rain_features.py`, and CART model v1 is trained and tuned on train/validation by `scripts/train_cart.py` (see below). Test evaluation (ID 29) and DW prediction loading are not implemented yet.
+Version v0.2, 2026-10-21 (label decisions confirmed by the project member working on N1/N2 on 2026-10-21; that member accepted their confirmation as team approval). Original draft v0.1: 2026-10-08. The proposal requires CART classification of rain/no-rain within the next 24 hours. This document records established decisions and items requiring team agreement. Label generation and split purging are implemented in `scripts/rain_labels.py` (tests: `tests/test_rain_labels.py`) and exported to Gold ML by `scripts/export_rain_labels.py` (`gold/ml_labels/rain_next24h_labels_v1.parquet` with a JSON manifest). Exploratory analysis of the train split is in `notebooks/eda_rain_next24h.ipynb` (helpers: `scripts/rain_eda.py`). The feature dataset v1 is built by `scripts/build_rain_features.py`, and CART model v1 is trained and tuned on train/validation by `scripts/train_cart.py` (see below). The frozen model was evaluated once on test 2025 by `scripts/evaluate_cart_test.py` (ID 29). DW prediction loading is not implemented yet.
 
 ## Decisions and status
 
@@ -84,6 +84,26 @@ Result: `max_depth=8`, `min_samples_leaf=50`, `class_weight=balanced`, `ccp_alph
 | Always No | undefined | 0.000 | undefined | 0.506 |
 
 Validation chose both the configuration and the threshold, so these figures are optimistic; the independent estimate is the 2025 test evaluation (ID 29).
+
+### Test 2025 evaluation (ID 29, run once on 2026-10-21)
+
+- `scripts/evaluate_cart_test.py` loads the ID 28 model and threshold unchanged. Before reading test, it checks that the artifact reproduces the validation confusion matrix stored in `report.json`. It refuses to run when `test_evaluation.json` already exists, so test 2025 is evaluated once. Model SHA-256: `1f667b91365752a25f1cad0b31258ea39b9d4bd5a17c2d8faa4939260cd494b6`.
+- Outputs: `gold/ml_models/cart_rain_next24h_v1/test_evaluation.json` (metrics, baselines, breakdowns) and `test_predictions.parquet` (origin, target window, location, probability, predicted class, actual label) for error analysis (ID 36).
+- Coverage: 69,888 of 69,888 usable test labels were evaluated (no missing features). Of these, 49.0% are Rain.
+
+| Predictor on test 2025 | Precision | Recall | F1 | Accuracy |
+| --- | --- | --- | --- | --- |
+| CART v1, frozen threshold 0.40 | 0.756 | 0.795 | 0.775 | 0.774 |
+| CART v1 at 0.50 (reference only) | 0.789 | 0.746 | 0.767 | 0.778 |
+| Persistence (past 24 h ≥ 1 mm) | 0.727 | 0.725 | 0.726 | 0.732 |
+| Location × month Rain rate (train) | 0.673 | 0.691 | 0.682 | 0.684 |
+| Always Yes | 0.490 | 1.000 | 0.658 | 0.490 |
+| Always No | undefined | 0.000 | undefined | 0.510 |
+
+- Confusion matrix at 0.40 (Rain positive): TP 27,254, FP 8,782, TN 26,840, FN 7,012.
+- F1 by location: 0.763 (HBI) to 0.785 (TUQ). Wet season May–Oct: F1 0.835 (recall 0.878). Dry season Nov–Apr: F1 0.621 (recall 0.600). By month, F1 ranges from 0.524 (January) to 0.904 (June).
+- Share of Rain cases detected by rain amount: 1–5 mm 67%, 5–20 mm 84%, ≥ 20 mm 94%.
+- Test F1 is 1.1 points below validation (0.786), consistent with validation being optimistic after selection. No design choice was changed after seeing test. Results are a retrospective experiment on Open-Meteo reanalysis.
 
 ## Artifacts and acceptance
 

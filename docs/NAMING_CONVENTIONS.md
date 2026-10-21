@@ -163,7 +163,7 @@ The pattern above covers combined-source files or samples, retaining `source_nam
 | **Dim Station** | `dim_station/dim_station.parquet` | `gold/dim_station/dim_station.parquet` |
 | **ML labels (implemented)** | `ml_labels/rain_next24h_labels_<version>.parquet` + `.json` manifest | `gold/ml_labels/rain_next24h_labels_v1.parquet` |
 | **ML Dataset (CART, implemented)** | `ml_features/cart_rain_<split tag>_<version>.parquet` (split tags `train_2016_2023`, `val_2024`, `test_2025`) + `ml_features/cart_rain_features_<version>.json` manifest | `gold/ml_features/cart_rain_train_2016_2023_v1.parquet`<br>`gold/ml_features/cart_rain_val_2024_v1.parquet`<br>`gold/ml_features/cart_rain_test_2025_v1.parquet` |
-| **CART model (implemented)** | `ml_models/cart_rain_next24h_<version>/model.joblib` + `report.json` | `gold/ml_models/cart_rain_next24h_v1/model.joblib` |
+| **CART model (implemented)** | `ml_models/cart_rain_next24h_<version>/model.joblib` + `report.json`; after the one-time test evaluation also `test_evaluation.json` + `test_predictions.parquet` | `gold/ml_models/cart_rain_next24h_v1/model.joblib` |
 | **Model predictions** | `predictions/year=YYYY/month=MM/rain_predictions_cart_<YYYYMMDD>.parquet` | `gold/predictions/year=2024/month=05/rain_predictions_cart_20240501.parquet` |
 
 ---

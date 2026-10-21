@@ -708,3 +708,30 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
   - The feature list, selection rule, and threshold have not been reviewed by the team.
 - Next step: ID 29, evaluate the frozen model and threshold once on test 2025; then ID 30, tree figure and rules.
 
+## CART test 2025 evaluation (workbook ID 29) — 2026-10-21
+
+- Related work: workbook ID 29 (N3's task, done by the N1/N2 member as agreed); `docs/rain-label.md` v0.2. The workbook mentions threshold adjustment together with test; as documented in `rain-label.md`, the threshold (0.40) was chosen on validation in ID 28 and only applied here.
+- Objective/scope: one evaluation of the frozen ID 28 model on test 2025 (all 8 locations), with baselines and breakdowns.
+- Changes:
+  - New `scripts/evaluate_cart_test.py`. It loads the model and `report.json` and checks the feature list against the feature manifest. It verifies that the model reproduces the stored validation confusion matrix before reading test, refuses to run if `test_evaluation.json` exists, and writes `test_evaluation.json` and `test_predictions.parquet` next to the model.
+  - New `tests/test_evaluate_cart_test.py` (3 tests): frozen threshold, metrics recomputable from the saved predictions, refusal of a second run; a swapped model is rejected before the test file is requested; feature-order mismatch is rejected.
+  - `tests/test_train_cart.py` fixture now includes target window columns, as in the real feature files.
+  - Docs: `docs/rain-label.md` test 2025 section; `docs/NAMING_CONVENTIONS.md` model row; `README.md`; `docs/architecture.md`. Workbook ID 29: Đang làm, 90.
+- Checks:
+  - `ruff format`/`ruff check` passed; `make test` → 87 passed, 14 deselected.
+  - Before passing, two runs failed on test-fixture issues: missing target columns, and a swapped depth-1 tree that happened to reproduce the same confusion matrix on the one-split synthetic rule, so the test now uses an always-Rain model.
+  - A third failure was a real bug: integer month keys in the evaluation dict did not survive the JSON round trip; keys are now strings.
+  - None of these runs touched real test data.
+- Data (real): `evaluate_cart_test.py` in the Airflow image, 10 s, run once.
+  - Validation reproduction passed. Coverage: 69,888 of 69,888 test labels.
+  - At threshold 0.40: TP 27,254, FP 8,782, TN 26,840, FN 7,012; precision 0.756, recall 0.795, F1 0.775, accuracy 0.774.
+  - Baseline F1: persistence 0.726, location × month rate 0.682, always Yes 0.658; always No has recall 0.
+  - By location, F1 0.763 (HBI) to 0.785 (TUQ). By season, wet May–Oct F1 0.835 (recall 0.878), dry Nov–Apr F1 0.621 (recall 0.600). January 0.524, June 0.904.
+  - Share of Rain cases detected: 1–5 mm 67%, 5–20 mm 84%, ≥ 20 mm 94%.
+  - Model SHA-256 `1f667b91…94b6` (full value in `rain-label.md`).
+- Limits:
+  - Retrospective result on Open-Meteo reanalysis; labels are reanalysis rain, not gauge rain. A GHCNh station-rain check of predictions is possible later.
+  - Test F1 is 1.1 points below validation. The model beats persistence by 4.9 F1 points on test, but performs poorly in the dry season and on light rain.
+  - Not yet reviewed by the team.
+  - Any new model version must not be evaluated on test 2025 as an independent result.
+- Next step: ID 30, tree figure and rules from this artifact; ID 31, predictions into the DW.

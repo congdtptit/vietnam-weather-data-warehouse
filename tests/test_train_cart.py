@@ -36,6 +36,8 @@ def _split(split, start, hours, seed):
         y = (df["humidity_percent"] > 80) ^ (rng.uniform(size=hours) < 0.05)
         df.insert(0, "location_code", loc)
         df.insert(1, "origin_utc", ts)
+        df.insert(2, "target_start_utc", ts)
+        df.insert(3, "target_end_utc", ts + pd.Timedelta(hours=24))
         df["split"] = split
         df["rain_next24h"] = y.to_numpy()
         df["rain_next24h_mm"] = np.where(y, 3.0, 0.0)
