@@ -648,3 +648,34 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
   - Largest separations (|SMD|): dew point 0.81, past-24 h rain 0.76, humidity 0.75, pressure 0.73 (lower before rain), dew-point depression 0.70, cloud cover 0.66. Wind speed and solar radiation are near 0.
   - Past-24 h rain bins rise from 17% (< 0.1 mm) to 92% (≥ 50 mm).
 - Limits: reanalysis inputs only; no feature set or model yet (IDs 23, 28). Notebook figures are static (no interactive layer). Validation/test statistics were not used for any choice.
+
+## README and architecture status refresh — 2026-10-21
+
+- Related work: documentation only; no workbook task status change.
+- Objective/scope: bring the summary documents in line with the work logged above (IDs 6, 7, 9, 19, 20, 21, 22 and the 2026-10-21 rebuild).
+- Changes:
+  - `README.md`: rewrote "Trạng thái hiện tại" (was the 2026-10-10 state saying Silver/Gold, DW loader, and OLAP did not exist). Added the two new docs to the document table and the new scripts, SQL files, notebook, and notebook lockfile to the repository tree.
+  - `docs/architecture.md`: component table now reflects the implemented ETL, station sources, OLAP views, ML labels/EDA, and remaining gaps (ERA5, GeoJSON, Bronze manifests ID 8, DAG ID 17, features ID 23, model, PBIX).
+  - `docs/rain-label.md`: status sentence now points to the EDA notebook.
+- Checks: internal Markdown links and code fences in the three files checked with a local script (0 missing, 0 unbalanced). No services, tests, or data operations were run; figures quoted in the README are copied from the dated entries above.
+- Limits: the 2026-10-08 Inventory and Discrepancies tables at the top of this log are kept as a historical snapshot; some rows there (labels, station selection, Silver/Gold ETL, DW loading) were resolved later, as recorded in the dated entries.
+
+## RainNext24h feature dataset (workbook ID 23) — 2026-10-21
+
+- Related work: workbook ID 23 (N3's task, done by the N1/N2 member as agreed); `docs/rain-label.md` v0.2 leakage rules; feature source decision of 2026-10-21 (Open-Meteo only).
+- Objective/scope: leakage-free lag, rolling, pressure-tendency, and hour/month features for every usable RainNext24h label, 8 canonical locations, origins 2016–2025.
+- Changes:
+  - New `scripts/build_rain_features.py`. It reads the ID 22 labels from Gold, refuses labels of another label version, reads Silver Open-Meteo (refusing incomplete snapshots, as in ID 22), and computes 22 features per location on a gap-checked hourly grid. It writes one Parquet file per split to `gold/ml_features/` and a manifest with the ordered features, units, versions, split boundaries, counts, and missing values.
+  - New `tests/test_rain_features.py` (6 tests): exact values at t, with every value after t changed leaving all features unchanged; missing history and a missing hour give NaN, while a lag that skips the gap stays valid; no lag crosses locations; UTC+7 hour/month at a year boundary; only usable labels kept and the target amount is not a feature; mock-MinIO export of split files and manifest.
+  - Docs: `docs/rain-label.md` feature dataset v1 section; `docs/NAMING_CONVENTIONS.md` ML dataset row now matches the implemented keys (the old path pattern `cart_rain_prediction_<split>_<version>` disagreed with its own examples); `README.md`, `docs/architecture.md`.
+  - Workbook ID 23: Đang làm, 90.
+- Checks:
+  - `ruff format`/`ruff check` passed on the new files.
+  - `make test` → 80 passed, 14 deselected. The first run failed one test because the test's expected value was wrong (0.5 mm, not 1.0 mm, over hours 28–30); the code was unchanged.
+- Data (real): `build_rain_features.py --start-year 2016 --end-year 2025` in the Airflow image, 17 s.
+  - 700,800 rows, equal to the usable labels of ID 22: train 560,832 (Yes 50.89%), validation 70,080 (49.42%), test 69,888 (49.03%).
+  - Missing feature values only in the first 24 origin hours of 2016: 192 train rows; validation and test have none.
+  - Objects: train 16.9 MB, validation 2.0 MB, test 2.0 MB, plus `cart_rain_features_v1.json`.
+  - Independent check: 6 random rows (3 train, 3 validation) recomputed from the raw Silver monthly objects matched for `rain_past_6h_mm`, `rain_past_24h_mm`, `pressure_change_3h_hpa`, `humidity_percent_lag6h`, and `hour_local`.
+- Limits: features and labels both come from Open-Meteo reanalysis, so results are retrospective and the features are not proven available in real time. No imputation, encoding, or feature selection yet (ID 28, train only). The feature list was not reviewed by the team. A partial year range (for example only 2024) has no earlier history, so its first 23–24 origins per location miss the long-window features.
+- Next step: ID 28, train and tune CART on train with selection on validation 2024.
