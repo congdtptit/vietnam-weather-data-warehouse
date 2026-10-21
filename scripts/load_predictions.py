@@ -24,10 +24,11 @@ import sys
 from typing import Any
 
 import pandas as pd
-from evaluate_cart_test import evaluation_keys
+from evaluate_cart_test import _exists, evaluation_keys
 from load_gold_observations import get_db_connection, get_minio_client
 from minio import Minio
 from psycopg2.extras import Json, execute_values
+from rescore_cart_corrected_labels import corrected_evaluation_key
 from train_cart import MODEL_VERSION, _get, model_keys
 
 LOCAL_OFFSET = pd.Timedelta(hours=7)  # Vietnam, UTC+7; matches dim_date/dim_time keys
@@ -197,10 +198,15 @@ def load_predictions(conn, report, evaluation, preds: pd.DataFrame) -> dict[str,
 
 
 def read_inputs(client: Minio, version: str) -> tuple[dict, dict, pd.DataFrame]:
+    """Report, evaluation, and predictions. dim_model test metrics come from the
+    corrected-label re-score when it exists (labels v0.2.1), else from the original."""
     _, report_key = model_keys(version)
     eval_key, pred_key = evaluation_keys(version)
+    corrected_key = corrected_evaluation_key(version)
     report = json.loads(_get(client, report_key))
-    evaluation = json.loads(_get(client, eval_key))
+    evaluation = json.loads(
+        _get(client, corrected_key if _exists(client, corrected_key) else eval_key)
+    )
     preds = pd.read_parquet(io.BytesIO(_get(client, pred_key)))
     return report, evaluation, preds
 
