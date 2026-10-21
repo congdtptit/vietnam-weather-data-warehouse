@@ -15,12 +15,12 @@ Cập nhật ngày **2026-10-21**. Bằng chứng chi tiết (lệnh đã chạy
 - ETL bằng script: Open-Meteo và Meteostat → Bronze → Silver → Gold → `fact_weather_observation`. Meteostat chỉ giữ giá trị quan trắc (loại giá trị mô hình dự báo). DAG Airflow mới có cho bước Open-Meteo → Bronze; DAG Bronze → DW (task 17) chưa có.
 - Mưa ngày tại trạm từ NOAA GHCNh (5 trạm) → bảng riêng `fact_station_daily_rain`, kèm view so sánh với Open-Meteo.
 - View OLAP giờ/ngày/tháng/năm và độ phủ (`sql/02_olap_views.sql`); hướng dẫn dựng Power BI v1 (`docs/powerbi-dashboard-v1.md`). File PBIX chưa có.
-- Nhãn RainNext24h (ngưỡng 1 mm, chia train/validation/test theo năm UTC, purge biên) xuất ra Gold ML; notebook EDA `notebooks/eda_rain_next24h.ipynb` với môi trường riêng (`make notebook-setup`); bộ 22 đặc trưng không rò rỉ dữ liệu tương lai trong `gold/ml_features/` (3 file theo tập train/validation/test); mô hình CART v1 đã train, chọn tham số trên validation 2024 và đánh giá một lần trên test 2025 (F1 0,775, Recall 0,795; mốc dự báo theo hiện trạng F1 0,726).
+- Nhãn RainNext24h (ngưỡng 1 mm, chia train/validation/test theo năm UTC, purge biên) xuất ra Gold ML; notebook EDA `notebooks/eda_rain_next24h.ipynb` với môi trường riêng (`make notebook-setup`); bộ 22 đặc trưng không rò rỉ dữ liệu tương lai trong `gold/ml_features/` (3 file theo tập train/validation/test); mô hình CART v1 đã train, chọn tham số trên validation 2024 và đánh giá một lần trên test 2025 (F1 0,775, Recall 0,795; mốc dự báo theo hiện trạng F1 0,726); hình cây và luật trong `notebooks/cart_tree_rules.ipynb`.
 - Ruff, pre-commit, Makefile, pytest và cấu hình GitHub Actions; tài liệu nghiệp vụ và đặc tả task tuần 2–5.
 
 Dữ liệu thực 2016–2025 đã được dựng lại trên một máy cục bộ ngày 2026-10-21: DW có 788.861 dòng quan sát giờ (Open-Meteo 8 vị trí; Meteostat chỉ Hà Nội và không có mưa), 17.866 dòng mưa ngày GHCNh, 700.800 nhãn dùng được. Lần kiểm tra gần nhất: `make test` 74 test đạt, `make test-integration` 14 test đạt.
 
-**Chưa hoàn chỉnh**: ERA5, địa giới GeoJSON thực (63 tỉnh, trước sáp nhập), lưu payload gốc Bronze kèm manifest, DAG Bronze → DW, hình cây và luật CART, bảng dự báo trong DW và dashboard Power BI. Nhãn và đặc trưng dựa trên dữ liệu tái phân tích, chưa phải số đo trạm. Trạng thái nghiệm thu từng task do bảng phân công quản lý, không suy ra từ việc có file.
+**Chưa hoàn chỉnh**: ERA5, địa giới GeoJSON thực (63 tỉnh, trước sáp nhập), lưu payload gốc Bronze kèm manifest, DAG Bronze → DW, bảng dự báo trong DW và dashboard Power BI. Nhãn và đặc trưng dựa trên dữ liệu tái phân tích, chưa phải số đo trạm. Trạng thái nghiệm thu từng task do bảng phân công quản lý, không suy ra từ việc có file.
 
 ## Tài liệu và phân công
 
@@ -172,13 +172,13 @@ Test_DL_weather/
 │   ├── transform_*_to_silver.py   # Open-Meteo, Meteostat, GHCNh → Silver
 │   ├── load_gold_observations.py, load_station_daily_rain.py
 │   ├── quality_checks.py
-│   └── rain_labels.py, export_rain_labels.py, rain_eda.py, build_rain_features.py, train_cart.py, evaluate_cart_test.py
+│   └── rain_labels.py, export_rain_labels.py, rain_eda.py, build_rain_features.py, train_cart.py, evaluate_cart_test.py, cart_rules.py
 ├── sql/                           # Khởi tạo DW và hướng dẫn SQL
 │   ├── 01_init_postgres.sh
 │   ├── init_dwh_schema.sql
 │   ├── 02_olap_views.sql
 │   └── 03_station_daily_rain.sql
-├── notebooks/                     # Notebook EDA RainNext24h
+├── notebooks/                     # Notebook EDA, cây và luật CART
 ├── tests/                         # Test offline/integration và fixture
 ├── plugins/                       # Thư mục plugin Airflow
 ├── config/                        # Cấu hình Airflow bổ sung

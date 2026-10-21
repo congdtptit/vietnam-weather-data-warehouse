@@ -1,6 +1,6 @@
 # RainNext24h and Evaluation Methodology
 
-Version v0.2, 2026-10-21 (label decisions confirmed by the project member working on N1/N2 on 2026-10-21; that member accepted their confirmation as team approval). Original draft v0.1: 2026-10-08. The proposal requires CART classification of rain/no-rain within the next 24 hours. This document records established decisions and items requiring team agreement. Label generation and split purging are implemented in `scripts/rain_labels.py` (tests: `tests/test_rain_labels.py`) and exported to Gold ML by `scripts/export_rain_labels.py` (`gold/ml_labels/rain_next24h_labels_v1.parquet` with a JSON manifest). Exploratory analysis of the train split is in `notebooks/eda_rain_next24h.ipynb` (helpers: `scripts/rain_eda.py`). The feature dataset v1 is built by `scripts/build_rain_features.py`, and CART model v1 is trained and tuned on train/validation by `scripts/train_cart.py` (see below). The frozen model was evaluated once on test 2025 by `scripts/evaluate_cart_test.py` (ID 29). DW prediction loading is not implemented yet.
+Version v0.2, 2026-10-21 (label decisions confirmed by the project member working on N1/N2 on 2026-10-21; that member accepted their confirmation as team approval). Original draft v0.1: 2026-10-08. The proposal requires CART classification of rain/no-rain within the next 24 hours. This document records established decisions and items requiring team agreement. Label generation and split purging are implemented in `scripts/rain_labels.py` (tests: `tests/test_rain_labels.py`) and exported to Gold ML by `scripts/export_rain_labels.py` (`gold/ml_labels/rain_next24h_labels_v1.parquet` with a JSON manifest). Exploratory analysis of the train split is in `notebooks/eda_rain_next24h.ipynb` (helpers: `scripts/rain_eda.py`). The feature dataset v1 is built by `scripts/build_rain_features.py`, and CART model v1 is trained and tuned on train/validation by `scripts/train_cart.py` (see below). The frozen model was evaluated once on test 2025 by `scripts/evaluate_cart_test.py` (ID 29). The tree figure and rules of that artifact are in `notebooks/cart_tree_rules.ipynb` (ID 30; helpers `scripts/cart_rules.py`). DW prediction loading is not implemented yet.
 
 ## Decisions and status
 
@@ -48,7 +48,7 @@ The rainfall threshold in mm defines ground truth. The probability threshold def
 - `location_code` is an identifier and a candidate categorical feature; encoding is decided in the training pipeline (ID 28).
 - `rain_next24h_mm` is kept for error analysis only and is never a feature.
 - A lag or window touching a missing hour is NaN; nothing is filled. In the 2016–2025 build, missing values occur only in the first 24 origin hours of 2016 (192 train rows). Imputation, if needed, is fitted on train in ID 28.
-- Solar radiation and wind direction were left out because the train-split EDA showed no separation (solar radiation also mostly encodes the hour). Open-Meteo is reanalysis with publication delay, so results are retrospective.
+- Solar radiation was left out because the train-split EDA showed no separation and it mostly encodes the hour. Wind direction was also left out, but the EDA never assessed it (correction recorded 2026-10-21 in ID 30), so its exclusion has no evidence behind it; it is the first candidate for a feature v2. Open-Meteo is reanalysis with publication delay, so results are retrospective.
 
 ## Splits and threshold selection
 
@@ -104,6 +104,21 @@ Validation chose both the configuration and the threshold, so these figures are 
 - F1 by location: 0.763 (HBI) to 0.785 (TUQ). Wet season May–Oct: F1 0.835 (recall 0.878). Dry season Nov–Apr: F1 0.621 (recall 0.600). By month, F1 ranges from 0.524 (January) to 0.904 (June).
 - Share of Rain cases detected by rain amount: 1–5 mm 67%, 5–20 mm 84%, ≥ 20 mm 94%.
 - Test F1 is 1.1 points below validation (0.786), consistent with validation being optimistic after selection. No design choice was changed after seeing test. Results are a retrospective experiment on Open-Meteo reanalysis.
+
+### Tree and rules of CART v1 (ID 30, 2026-10-21)
+
+`notebooks/cart_tree_rules.ipynb` checks that the model SHA-256 equals the one in `test_evaluation.json` before drawing anything. It shows the first 3 of 8 levels, every leaf as a merged rule with train rows and observed Rain share, the importances, and three worked test-2025 examples chosen by fixed rules: largest-rain true positive, highest-probability false positive, and largest-rain false negative. Thresholds are in original units; Open-Meteo rain has 0.1 mm resolution, so `≤ 0.05 mm` means no rain.
+
+- Root: past-12-hour rain ≤ 0.35 mm → 288,873 train rows, 26% Rain; otherwise 271,767 rows, 77% Rain.
+- Largest Rain rule (69,273 rows, 97% Rain): past-12-hour rain > 0.35 mm, rain at *t* > 0.25 mm, past-24-hour rain > 2.95 mm, surface pressure ≤ 1015.35 hPa, 6-hour mean humidity > 80.42%.
+- Largest No-rain rule (39,695 rows, 3% Rain): past-12-hour rain ≤ 0.05 mm, dew point ≤ 14.55 °C, cloud cover ≤ 96.5%, location ≠ LCA.
+- The first split on Lào Cai is at depth 5 and on month at depth 6. Surface pressure is lower at higher points (train mean about 1001 hPa at Lào Cai versus 1007–1010 hPa elsewhere), so pressure thresholds also encode location.
+- Missed rain on validation 2024 (post-selection description, no design change; computed in the notebook): 6,160 of 34,636 Rain cases (17.8%) are missed.
+  - 64.2% of misses are under 5 mm (median 2.9 mm), and 55.3% had a probability of 0.30–0.40, just under the threshold.
+  - Recall falls with rain onset: 91% when rain starts within 3 h of *t*, 45% when it starts after 19 h.
+  - Rain after a dry 24 h (≤ 0.05 mm) accounts for 36.1% of misses and is rarely caught: recall 17.0% overall, 2.6% in the dry season, 31.7% in the wet season. After rain in the past 24 h, recall is 87.7%.
+- The largest-rain miss in test 2025 (Ninh Bình, 57.9 mm, probability 0.39) is not typical. Rain began one hour after *t* under a fully overcast sky with a northerly wind and pressure 6.9 hPa higher than a day earlier; the model has no wind-direction feature, and its leaf holds 39% Rain in train.
+- 52 of 88 leaves predict Rain; the 10 largest rules cover 45.6% of train rows; rules have 4–7 merged conditions. Leaf probabilities differ from the observed train Rain share by at most 0.009, because the classes are nearly balanced.
 
 ## Artifacts and acceptance
 

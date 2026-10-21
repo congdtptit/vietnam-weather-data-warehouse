@@ -735,3 +735,74 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
   - Not yet reviewed by the team.
   - Any new model version must not be evaluated on test 2025 as an independent result.
 - Next step: ID 30, tree figure and rules from this artifact; ID 31, predictions into the DW.
+
+## CART tree figure and rules (workbook ID 30) — 2026-10-21
+
+- Related work: workbook ID 30 (N3's task, done by the N1/N2 member as agreed); `docs/rain-label.md`; the artifact evaluated in ID 29.
+- Objective/scope: draw and explain the tree and extract classification rules from the evaluated model, with real feature names and units. The model was not refitted or changed.
+- Changes:
+  - New `scripts/cart_rules.py`, which:
+    - loads the model, report, and model SHA-256;
+    - merges each root-to-leaf path into one condition per variable, using whole numbers for hour/month and translating one-hot columns into `location = X`, `location ≠ X`, or `location not in {…}`;
+    - builds a leaf rule table with train rows, observed Rain share, model probability, and class at the frozen threshold;
+    - builds a node table for the top levels and the decision path of one row.
+  - New `tests/test_cart_rules.py` (4 tests): condition merging and location/integer wording; leaf rules cover every row and match `predict_proba`, and the learned synthetic rule is recovered with its units; node counts and the yes-branch are verified independently; the decision path length equals the leaf depth.
+  - New `notebooks/cart_tree_rules.ipynb`, committed with executed outputs. Its builder lives outside the repository, like the EDA notebook's. The notebook contains:
+    - a model SHA-256 check against `test_evaluation.json`;
+    - a tree figure of 3 levels in the validated sequential palette, with its node table;
+    - the top 10 Rain and No-rain rules;
+    - a coverage summary;
+    - an importance chart and table;
+    - three test-2025 examples chosen by fixed rules;
+    - key numbers, an interpretation, and all 88 rules.
+  - `Makefile` `notebook-run` accepts `NOTEBOOK=…` (default unchanged), documented in `docs/development.md`.
+  - Docs: `docs/rain-label.md` tree and rules section; `README.md`; `docs/architecture.md`. Workbook ID 30: Đang làm, 90.
+- Checks:
+  - `ruff check`/`format` passed; `make test` → 91 passed, 14 deselected.
+  - The first run failed one test whose expected text was too strict (the learned threshold was 79.92 %, not ≥ 80); the code was unchanged.
+  - `make notebook-run NOTEBOOK=cart_tree_rules.ipynb` → 0 errors, about 9 s. Both figures were rendered and inspected.
+  - The first interpretation draft stated the root branches the wrong way round. It was corrected against the printed node table, and every number in the interpretation was rechecked against cell outputs, including the shallowest split depth of each variable (Lào Cai 5, month 6, `hour_local` 4).
+- Data (real): train 2016–2023, 560,640 rows, for the rule statistics; test 2025 predictions from ID 29 for the three examples only.
+  - Root split: past-12-hour rain ≤ 0.35 mm (26% Rain, 288,873 rows) versus > 0.35 mm (77% Rain, 271,767 rows).
+  - 52 of 88 leaves predict Rain; the 10 largest rules cover 45.6% of train rows; rules have 4–7 merged conditions.
+  - Leaf probability versus observed train share differs by at most 0.009.
+  - Examples: largest-rain TP at Hà Nội (144.6 mm, p 0.97); highest-probability FP at Hà Nội (0.7 mm, p 0.97); largest-rain FN at Ninh Bình (57.9 mm, p 0.39).
+- Limits:
+  - The figure shows 3 of 8 levels.
+  - Importance and rules describe correlations in reanalysis data, not causes.
+  - Surface pressure partly encodes elevation/location.
+  - The examples are illustrations, not a full error analysis (ID 36).
+  - Not yet reviewed by the team.
+- Next step: ID 31, load predictions and `dim_model` into the DW.
+
+## Correction to the ID 30 error interpretation — 2026-10-21
+
+- Related work: workbook ID 30; follow-up to the entry above, at the user's request to check the "missed rain" explanation.
+- Problem found:
+  - The first notebook interpretation (and the report to the user) generalized from one example. It called "rain without warning" the model's main weakness, based on the largest-rain test miss.
+  - That example was selected for its size, so it is not typical. Its hourly data also contradict the wording: rain began one hour after *t*, after 0.1 mm of drizzle, under a fully overcast sky with a northerly wind and pressure 6.9 hPa higher than a day earlier.
+  - The verbal report also quoted 89% humidity at *t*; that value was six hours earlier, and humidity was 76% at *t*.
+  - Separately, `docs/rain-label.md` said wind direction was excluded from features v1 because the EDA showed no separation, but the EDA never assessed wind direction.
+- Changes:
+  - `scripts/cart_rules.py`: `hours_to_first_rain` (first rainy hour in the target window, per location on a gap-checked grid) and `missed_rain_profile`.
+  - `tests/test_cart_rules.py`: +2 tests (onset with a gap and no-rain cases; profile counts).
+  - `notebooks/cart_tree_rules.ipynb`:
+    - adds a typical-miss example (probability 0.30–0.40, under 5 mm, closest to the median miss: Lào Cai, 3.0 mm, p 0.36);
+    - adds the hourly Silver context of the extreme miss;
+    - adds a §5 error profile on validation 2024 with an onset recall chart;
+    - corrects the interpretation.
+  - `docs/rain-label.md`: error profile; wind-direction statement corrected.
+- Checks:
+  - `ruff` passed; `make test` → 93 passed, 14 deselected.
+  - `make notebook-run NOTEBOOK=cart_tree_rules.ipynb` → 0 errors after one fix (an object-dtype `round` error in the new context cell).
+  - The new chart was inspected. The notebook text was checked against the printed hourly table.
+- Data (real, validation 2024; describes errors only, no model or threshold change):
+  - Missed: 6,160 of 34,636 Rain cases (17.8%); 64.2% of misses under 5 mm; 55.3% with probability 0.30–0.40; 36.1% after a dry 24 h.
+  - Recall after a dry 24 h: 17.0% overall, 2.6% in the dry season, 31.7% in the wet season. Recall after a wet 24 h: 87.7%.
+  - Recall by onset: 1–3 h 91%, 4–6 h 71%, 7–12 h 66%, 13–18 h 61%, 19–24 h 45%.
+  - For reference, on validation a threshold of 0.35 gives recall 0.901, F1 0.784, and 4,423 more false alarms than 0.40. This trade-off is for ID 36; v1 keeps 0.40.
+- Limits: improvement options are recorded but not done:
+  - feature v2 with wind direction, humidity/cloud trends, and neighbouring-location rain, selected on validation only;
+  - a threshold comparison (ID 36);
+  - numerical weather prediction inputs (out of scope).
+  Any v2 measured on test 2025 is no longer an independent result.
