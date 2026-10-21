@@ -75,6 +75,9 @@ data/gold/*
 *.tar.gz
 *.zip
 
+# Local analysis artifacts (diagrams, review reports); shared outside the repository
+outputs/
+
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints
 */.ipynb_checkpoints/*
