@@ -367,8 +367,8 @@ def test_pressure_type_and_provenance():
 
     # Meteostat CSV payload
     meteostat_csv = (
-        b"year,month,day,hour,temp,rhum,pres,prcp,wspd,wdir,cldc,coco\n"
-        b"2024,1,1,0,21.5,85,1015.2,0.0,10.8,90,4,1\n"
+        b"year,month,day,hour,temp,temp_source,rhum,rhum_source,pres,pres_source\n"
+        b"2024,1,1,0,21.5,isd_lite,85,isd_lite,1015.2,metar\n"
     )
     ms_clean, _, _ = clean_and_standardize_meteostat(
         raw_csv_bytes=meteostat_csv,
@@ -383,21 +383,91 @@ def test_pressure_type_and_provenance():
     assert ms_clean.loc[0, "observation_type"] == "station_reported"
 
 
+def test_meteostat_model_values_removed_by_source():
+    """Model-sourced values are nulled per variable; model-only rows are dropped."""
+    csv = (
+        b"year,month,day,hour,temp,temp_source,prcp,prcp_source,rhum,rhum_source\n"
+        b"2024,1,1,0,21.5,isd_lite,0.4,dwd_mosmix,85,metar\n"
+        b"2024,1,1,1,21.0,metno_forecast,1.2,metno_forecast,80,metno_forecast\n"
+        b"2024,1,1,2,20.5,isd_lite,,,79,some_new_model\n"
+    )
+    clean, _, dq = clean_and_standardize_meteostat(
+        raw_csv_bytes=csv,
+        station_id="48820",
+        start_time="2024-01-01 00:00:00+00:00",
+        end_time="2024-01-01 03:00:00+00:00",
+    )
+
+    # Hour 1 had only model values and is dropped; hours 0 and 2 remain
+    assert list(clean["timestamp_utc"].dt.hour) == [0, 2]
+    assert clean.loc[0, "temperature_c"] == 21.5
+    assert pd.isna(clean.loc[0, "precipitation_mm"])  # dwd_mosmix removed
+    assert clean.loc[0, "humidity_percent"] == 85
+    assert pd.isna(clean.loc[1, "humidity_percent"])  # unknown source treated as non-observation
+    assert (clean["observation_type"] == "station_reported").all()
+
+    sf = dq["source_filter"]
+    assert sf["source_columns_present"] is True
+    assert sf["model_values_removed"] == {"temp": 1, "rhum": 2, "prcp": 2}
+    assert sf["rows_without_observation_dropped"] == 1
+    assert dq["hourly_coverage"]["missing_hours"] == 1
+
+
+def test_meteostat_all_model_payload_yields_no_rows():
+    csv = (
+        b"year,month,day,hour,temp,temp_source,prcp,prcp_source\n"
+        b"2024,1,1,0,21.5,metno_forecast,0.4,metno_forecast\n"
+    )
+    clean, _, dq = clean_and_standardize_meteostat(
+        raw_csv_bytes=csv,
+        station_id="48826",
+        start_time="2024-01-01 00:00:00+00:00",
+        end_time="2024-01-01 01:00:00+00:00",
+    )
+    assert clean.empty
+    assert dq["source_filter"]["rows_without_observation_dropped"] == 1
+
+
+def test_meteostat_legacy_payload_without_sources_is_unverified():
+    csv = b"year,month,day,hour,temp,prcp\n2024,1,1,0,21.5,0.0\n"
+    clean, _, dq = clean_and_standardize_meteostat(
+        raw_csv_bytes=csv,
+        station_id="48820",
+        start_time="2024-01-01 00:00:00+00:00",
+        end_time="2024-01-01 01:00:00+00:00",
+    )
+    assert clean.loc[0, "temperature_c"] == 21.5
+    assert clean.loc[0, "observation_type"] == "unverified_source"
+    assert dq["source_filter"]["source_columns_present"] is False
+
+
 # -----------------------------------------------------------------------------
 # 5. Station configuration synchronization & validation
 # -----------------------------------------------------------------------------
 def test_all_canonical_stations_have_valid_mappings():
-    """All 8 canonical research locations from Table 6 have valid station mappings."""
+    """Verified stations map 1:1 to canonical locations; locations without one stay unmapped."""
     canonical = get_canonical_stations()
-    assert len(canonical) == 8
+    assert set(canonical) == {"48820", "48826", "48831", "48803"}
 
-    mapped_locations = {s["location_code"] for s in canonical.values()}
-    assert mapped_locations == CANONICAL_LOCATIONS
+    mapped_locations = [s["location_code"] for s in canonical.values()]
+    assert len(mapped_locations) == len(set(mapped_locations))
+    assert set(mapped_locations) == {"HAN", "HPH", "TNG", "LCA"}
+    assert set(mapped_locations) <= CANONICAL_LOCATIONS
 
-    for sid in canonical:
+    for sid, info in canonical.items():
         is_valid, loc, msg = validate_station_location_mapping(sid)
         assert is_valid, msg
         assert loc in CANONICAL_LOCATIONS
+        assert info["latitude"] is not None and info["longitude"] is not None
+
+
+def test_misassigned_table6_station_ids_are_rejected():
+    """Ids whose verified identity is another station must not publish under a research location."""
+    for sid in ["48825", "48830", "48838", "48840", "48816"]:
+        is_valid, loc, msg = validate_station_location_mapping(sid)
+        assert not is_valid
+        assert loc is None
+        assert "Pending team decision" in msg
 
 
 def test_unmapped_stations_are_rejected_not_unknown():
@@ -632,3 +702,47 @@ def test_process_meteostat_to_silver_small_mock_run(monkeypatch):
     assert (df_obs["pressure_type"] == "sea_level").all()
     assert (df_obs["station_id"] == "48820").all()
     assert (df_obs["location_code"] == "HAN").all()
+
+
+def test_process_meteostat_overwrite_removes_stale_silver_months(monkeypatch):
+    """With --overwrite, months that no longer have observations lose their old Silver object."""
+    import transform_meteostat_to_silver as ms_silver
+
+    raw_csv = (
+        b"year,month,day,hour,temp,temp_source,prcp,prcp_source\n"
+        b"2024,5,1,0,24.0,isd_lite,0.0,dwd_mosmix\n"
+        b"2024,6,1,0,25.0,metno_forecast,1.0,metno_forecast\n"
+    )
+    existing = {
+        "weather_hourly/year=2024/month=05/weather_hourly_meteostat_48820_202405.parquet",
+        "weather_hourly/year=2024/month=06/weather_hourly_meteostat_48820_202406.parquet",
+    }
+
+    def mock_stat(bucket_name, object_name):
+        if object_name in existing:
+            return SimpleNamespace(size=1000)
+        raise S3Error("NoSuchKey", "missing", "/res", "req", "host", None)
+
+    client = Mock()
+    client.get_object.return_value = SimpleNamespace(read=lambda: raw_csv)
+    client.stat_object.side_effect = mock_stat
+    uploaded: dict[str, bytes] = {}
+    client.put_object.side_effect = lambda bucket_name, object_name, data, length, content_type: (
+        uploaded.__setitem__(object_name, data.getvalue())
+    )
+    monkeypatch.setattr(ms_silver, "get_minio_client", lambda: client)
+
+    dq = ms_silver.process_meteostat_to_silver(
+        start_year=2024, end_year=2024, station_ids=["48820"], overwrite=True
+    )
+
+    removed = [c.args[1] for c in client.remove_object.call_args_list]
+    assert removed == [
+        "weather_hourly/year=2024/month=06/weather_hourly_meteostat_48820_202406.parquet"
+    ]
+    assert dq["stale_monthly_parquet_removed"] == 1
+    assert dq["total_records_processed"] == 1
+    assert dq["failures"] == []
+    assert "weather_hourly/year=2024/month=05/weather_hourly_meteostat_48820_202405.parquet" in (
+        uploaded
+    )

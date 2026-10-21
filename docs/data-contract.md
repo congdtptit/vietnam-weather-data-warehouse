@@ -1,6 +1,6 @@
 # Weather Data Contract
 
-Document version: draft v0.1, 2026-10-08. This is the target implementation contract. No real Silver/Gold pipeline currently establishes compliance.
+Document version: v0.2, 2026-10-21. v0.2 confirms the Silver columns, units, UTC, pressure types, and duplicate handling below (confirmed by the project member working on N1/N2 on 2026-10-21; that member accepted their confirmation as team approval). Station selection is recorded below; the minimum coverage threshold remains open. This is the target implementation contract; the Silver stage has been executed on real data per `docs/progress.md`, but full-task acceptance is separate.
 
 ## Decision status
 
@@ -9,7 +9,11 @@ Document version: draft v0.1, 2026-10-08. This is the target implementation cont
 | Canonical UTC, standard units, and Parquet | Existing naming and task-allocation conventions |
 | Observations: source × location × hour | Proposal requirement |
 | Main variable names below | Existing conventions used by the DDL |
-| Conflicting duplicates, station selection, minimum coverage | Team decisions required before real-data publication |
+| Conflicting duplicates: identical rows collapse deterministically; conflicting rows are excluded from clean output and saved separately | Confirmed in v0.2 (matches implemented behavior) |
+| `pressure_type` (`surface` for Open-Meteo, `sea_level` for Meteostat) and `source_name`/`station_id` provenance retained; the two pressures are never merged | Confirmed in v0.2 |
+| Station selection | Decided 2026-10-21 (implemented in `scripts/station_config.py`): at most one verified WMO station per canonical location. Verified mappings: HAN `48820`, HPH `48826`, TNG `48831`, LCA `48803`; PTO, TUQ, HBI, NBI have no verified station and use gridded sources only. Stations without a confirmed mapping are rejected at publication, including the misassigned Table 6 ids (`48825`, `48830`, `48838`, `48840`), the unverified `48816`, and regional `48806`/`48808`. No multi-station aggregation. Open-Meteo and Meteostat stay separate sources and are never summed. Only `48820` and `48826` are currently served by Meteostat |
+| Meteostat model-filled values | Decided 2026-10-21 (implemented in `scripts/transform_meteostat_to_silver.py`): a Meteostat value is kept only when its `<variable>_source` is a station observation source (`isd_lite`, `metar`, `synop`, `national`). Model sources such as `dwd_mosmix` and `metno_forecast`, and unknown names, are nulled. Rows left without any measurement are dropped, and the counts are reported in the DQ report (`source_filter`). With `--overwrite`, Silver months that no longer have observations are removed. Payloads without any `<variable>_source` columns are kept as `unverified_source`. Effect on 2016–2025: Meteostat keeps HAN/48820 only and contains no precipitation, because all Meteostat rain for both stations was model-filled |
+| Coverage | Decided 2026-10-21: report record coverage per source × location × window (`scripts/quality_checks.py`); do not impute missing hours. A minimum coverage threshold is **not** set and remains open |
 | Product-specific interval semantics and pressure/radiation mapping | Verify source metadata/documentation during implementation |
 | Additional lineage/DQ column names and types | Contract proposals requiring producer/consumer agreement |
 
@@ -42,7 +46,7 @@ The following types are proposed Silver exchange types; they do not change Postg
 | `wind_direction_deg` | nullable float | Degrees under the source's meteorological convention |
 | `cloud_cover_percent` | nullable float | % |
 | `solar_radiation_wm2` | nullable float | W/m²; agree radiation type and interval before mapping |
-| `observation_type` | nullable string | Provenance indicator (`station_reported`, `model_reanalysis`) |
+| `observation_type` | nullable string | Provenance indicator (`station_reported`: every retained value passed the Meteostat source filter; `model_reanalysis`: Open-Meteo; `unverified_source`: Meteostat payload without per-variable sources) |
 
 Do not merge different variables such as direct-normal irradiance and shortwave radiation merely because units match. Surface and sea-level pressure are not equivalent: Open-Meteo produces surface pressure while Meteostat station archive provides sea-level pressure (`pressure_type` prevents downstream conflation). Retain extra variables in Bronze or introduce versioned schema additions when needed.
 

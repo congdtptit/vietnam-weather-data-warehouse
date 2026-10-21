@@ -1,13 +1,14 @@
 """Station metadata and location mapping configuration for Northern Vietnam weather sources.
 
 Canonical research locations are defined in docs/NAMING_CONVENTIONS.md Table 6 and docs/data-contract.md.
+PTO, TUQ, HBI, and NBI currently have no verified station; they are covered by gridded sources only.
 """
 
 from typing import Any
 
 # Canonical research locations in northern Vietnam (docs/NAMING_CONVENTIONS.md Table 6)
 CANONICAL_LOCATIONS: set[str] = {
-    "HAN",  # Hà Nội (Láng)
+    "HAN",  # Hà Nội
     "PTO",  # Phú Thọ (Việt Trì)
     "TNG",  # Thái Nguyên
     "TUQ",  # Tuyên Quang
@@ -18,89 +19,113 @@ CANONICAL_LOCATIONS: set[str] = {
 }
 
 # Unified station registry shared between ingestion and transformation.
-# Table 6 defines the 8 reference WMO stations for northern Vietnam research locations.
+# Station identities, coordinates, and elevations were verified on 2026-10-21 against
+# Meteostat station metadata (https://data.meteostat.net/stations/<id>.json) and the
+# NOAA ISD station history (isd-history.csv, USAF = WMO id + "0"). Meteostat coordinates
+# are used where Meteostat serves the station, because Meteostat is the ingested source.
+# Table 6 originally assigned several WMO ids to the wrong locations; those ids are kept
+# below with their verified identity and are no longer mapped to a research location.
 STATION_REGISTRY: dict[str, dict[str, Any]] = {
     "48820": {
-        "station_name": "Hà Nội (Láng)",
+        "station_name": "Hà Nội",
         "location_code": "HAN",
-        "latitude": 21.0285,
-        "longitude": 105.8542,
-        "elevation_m": 10.0,
+        "latitude": 21.0167,
+        "longitude": 105.8000,
+        "elevation_m": 6.0,
         "status": "CANONICAL",
-        "notes": "Reference WMO station for HAN in Table 6",
-    },
-    "48825": {
-        "station_name": "Việt Trì (Phú Thọ)",
-        "location_code": "PTO",
-        "latitude": 21.3986,
-        "longitude": 105.2280,
-        "elevation_m": 25.0,
-        "status": "CANONICAL",
-        "notes": "Reference WMO station for PTO in Table 6",
+        "notes": (
+            "Meteostat 'Ha Noi' (ICAO VVNB). NOAA ISD names 488200 'NOIBAI INTL' at "
+            "21.221, 105.807; coordinates follow Meteostat, the ingested source"
+        ),
     },
     "48826": {
+        "station_name": "Phù Liễn (Hải Phòng)",
+        "location_code": "HPH",
+        "latitude": 20.8000,
+        "longitude": 106.6333,
+        "elevation_m": 119.0,
+        "status": "CANONICAL",
+        "notes": "Meteostat 'Phu Lien'; NOAA ISD 488260 PHU LIEN. Table 6 listed it under TNG",
+    },
+    "48831": {
         "station_name": "Thái Nguyên",
         "location_code": "TNG",
-        "latitude": 21.5942,
-        "longitude": 105.8482,
-        "elevation_m": 35.0,
+        "latitude": 21.6000,
+        "longitude": 105.8330,
+        "elevation_m": 32.0,
         "status": "CANONICAL",
-        "notes": "Reference WMO station for TNG in Table 6",
-    },
-    "48816": {
-        "station_name": "Tuyên Quang",
-        "location_code": "TUQ",
-        "latitude": 21.8236,
-        "longitude": 105.2153,
-        "elevation_m": 50.0,
-        "status": "CANONICAL",
-        "notes": "Reference WMO station for TUQ in Table 6",
+        "notes": "NOAA ISD 488310 THAI NGUYEN; not served by Meteostat (HTTP 404)",
     },
     "48803": {
         "station_name": "Lào Cai",
         "location_code": "LCA",
-        "latitude": 22.4856,
-        "longitude": 103.9707,
-        "elevation_m": 80.0,
+        "latitude": 22.5000,
+        "longitude": 103.9670,
+        "elevation_m": 97.0,
         "status": "CANONICAL",
-        "notes": "Reference WMO station for LCA in Table 6",
+        "notes": "NOAA ISD 488030 LAO CAI; not served by Meteostat (HTTP 404)",
+    },
+    # Ids previously assigned in Table 6 whose verified identity is a different station.
+    "48825": {
+        "station_name": "Hà Đông (Hà Nội)",
+        "location_code": None,
+        "latitude": 20.9667,
+        "longitude": 105.7667,
+        "elevation_m": 6.0,
+        "status": "UNMAPPED_MISASSIGNED",
+        "notes": (
+            "Was mapped to PTO (Việt Trì) in Table 6. NOAA ISD 488250 HA DONG; Meteostat "
+            "coordinates match Hà Đông. Pending team decision"
+        ),
     },
     "48830": {
-        "station_name": "Hòa Bình",
-        "location_code": "HBI",
-        "latitude": 20.8172,
-        "longitude": 105.3376,
-        "elevation_m": 20.0,
-        "status": "CANONICAL",
-        "notes": "Reference WMO station for HBI in Table 6",
+        "station_name": "Lạng Sơn",
+        "location_code": None,
+        "latitude": 21.8333,
+        "longitude": 106.7667,
+        "elevation_m": 258.0,
+        "status": "UNMAPPED_MISASSIGNED",
+        "notes": "Was mapped to HBI (Hòa Bình) in Table 6. Meteostat/NOAA ISD: LANG SON",
     },
     "48838": {
-        "station_name": "Hải Phòng (Phù Liễn)",
-        "location_code": "HPH",
-        "latitude": 20.8449,
-        "longitude": 106.6881,
-        "elevation_m": 4.0,
-        "status": "CANONICAL",
-        "notes": "Reference WMO station for HPH in Table 6",
+        "station_name": "Móng Cái",
+        "location_code": None,
+        "latitude": 21.5170,
+        "longitude": 107.9670,
+        "elevation_m": 7.0,
+        "status": "UNMAPPED_MISASSIGNED",
+        "notes": "Was mapped to HPH in Table 6. NOAA ISD 488380 MONG CAI; not served by Meteostat",
     },
     "48840": {
-        "station_name": "Ninh Bình",
-        "location_code": "NBI",
-        "latitude": 20.2506,
-        "longitude": 105.9745,
-        "elevation_m": 5.0,
-        "status": "CANONICAL",
-        "notes": "Reference WMO station for NBI in Table 6",
+        "station_name": "Thanh Hóa",
+        "location_code": None,
+        "latitude": 19.8000,
+        "longitude": 105.7833,
+        "elevation_m": 7.0,
+        "status": "UNMAPPED_MISASSIGNED",
+        "notes": "Was mapped to NBI (Ninh Bình) in Table 6. Meteostat/NOAA ISD: THANH HOA",
     },
-    # Secondary / unmapped regional stations previously in ingestion list:
+    "48816": {
+        "station_name": "Unverified (Table 6 listed it for Tuyên Quang)",
+        "location_code": None,
+        "latitude": None,
+        "longitude": None,
+        "elevation_m": None,
+        "status": "UNMAPPED_UNVERIFIED",
+        "notes": "Not found in Meteostat or NOAA ISD; identity unverified. Pending team decision",
+    },
+    # Regional stations outside the research locations:
     "48806": {
         "station_name": "Sơn La",
         "location_code": None,
         "latitude": 21.3333,
         "longitude": 103.9000,
-        "elevation_m": 600.0,
+        "elevation_m": 676.0,
         "status": "UNMAPPED_REGIONAL_NW",
-        "notes": "Regional Northwest station; unmapped pending team decision",
+        "notes": (
+            "Regional Northwest station; unmapped pending team decision. "
+            "Elevation from NOAA ISD (Meteostat reports 0)"
+        ),
     },
     "48808": {
         "station_name": "Cao Bằng",

@@ -167,16 +167,18 @@ The pattern above covers combined-source files or samples, retaining `source_nam
 
 ## 6. Northern Vietnam Research Location References
 
-| Location code (`location_code`) | Location name | Latitude (`latitude`) | Longitude (`longitude`) | Estimated elevation (`elevation_m`) | Reference WMO station |
+Latitude/longitude/elevation are the research point used for gridded sources. Reference stations were verified on 2026-10-21 against Meteostat station metadata and the NOAA ISD station history; station coordinates live in `scripts/station_config.py`. The earlier version of this table assigned 48825 (Hà Đông), 48826 (Phù Liễn), 48830 (Lạng Sơn), 48838 (Móng Cái), and 48840 (Thanh Hóa) to the wrong locations; 48816 could not be verified.
+
+| Location code (`location_code`) | Location name | Latitude (`latitude`) | Longitude (`longitude`) | Estimated elevation (`elevation_m`) | Reference WMO station (verified) |
 |:---:|---|:---:|:---:|:---:|:---:|
-| **HAN** | Hà Nội | 21.0285 | 105.8542 | 10 m | 48820 (Láng) |
-| **PTO** | Phú Thọ | 21.3986 | 105.2280 | 25 m | 48825 (Việt Trì) |
-| **TNG** | Thái Nguyên | 21.5942 | 105.8482 | 35 m | 48826 |
-| **TUQ** | Tuyên Quang | 21.8236 | 105.2153 | 50 m | 48816 |
-| **LCA** | Lào Cai | 22.4856 | 103.9707 | 80 m | 48803 |
-| **HBI** | Hòa Bình | 20.8172 | 105.3376 | 20 m | 48830 |
-| **HPH** | Hải Phòng | 20.8449 | 106.6881 | 4 m | 48838 (Phù Liễn) |
-| **NBI** | Ninh Bình | 20.2506 | 105.9745 | 5 m | 48840 |
+| **HAN** | Hà Nội | 21.0285 | 105.8542 | 10 m | 48820 (Meteostat "Ha Noi"; NOAA ISD names it Nội Bài) |
+| **PTO** | Phú Thọ | 21.3986 | 105.2280 | 25 m | None verified |
+| **TNG** | Thái Nguyên | 21.5942 | 105.8482 | 35 m | 48831 (not served by Meteostat) |
+| **TUQ** | Tuyên Quang | 21.8236 | 105.2153 | 50 m | None verified |
+| **LCA** | Lào Cai | 22.4856 | 103.9707 | 80 m | 48803 (not served by Meteostat) |
+| **HBI** | Hòa Bình | 20.8172 | 105.3376 | 20 m | None verified |
+| **HPH** | Hải Phòng | 20.8449 | 106.6881 | 4 m | 48826 (Phù Liễn) |
+| **NBI** | Ninh Bình | 20.2506 | 105.9745 | 5 m | None verified |
 
 ---
 
