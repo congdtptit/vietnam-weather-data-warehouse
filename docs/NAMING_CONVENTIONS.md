@@ -161,6 +161,7 @@ The pattern above covers combined-source files or samples, retaining `source_nam
 | **Dim Location** | `dim_location/dim_location.parquet` | `gold/dim_location/dim_location.parquet` |
 | **Dim Source** | `dim_source/dim_source.parquet` | `gold/dim_source/dim_source.parquet` |
 | **Dim Station** | `dim_station/dim_station.parquet` | `gold/dim_station/dim_station.parquet` |
+| **ML labels (implemented)** | `ml_labels/rain_next24h_labels_<version>.parquet` + `.json` manifest | `gold/ml_labels/rain_next24h_labels_v1.parquet` |
 | **ML Dataset (CART)** | `ml_features/cart_rain_prediction_<split>_<version>.parquet` | `gold/ml_features/cart_rain_train_2016_2023_v1.parquet`<br>`gold/ml_features/cart_rain_val_2024_v1.parquet`<br>`gold/ml_features/cart_rain_test_2025_v1.parquet` |
 | **Model predictions** | `predictions/year=YYYY/month=MM/rain_predictions_cart_<YYYYMMDD>.parquet` | `gold/predictions/year=2024/month=05/rain_predictions_cart_20240501.parquet` |
 

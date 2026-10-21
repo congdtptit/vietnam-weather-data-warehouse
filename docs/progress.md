@@ -611,3 +611,16 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
   - DW: 17,866 rows; a 2024 rerun and the post-rule reload both left counts consistent, and the 700 mm day was retracted. 2025 station-year totals equal an independent parse of the same GHCNh files done earlier (for example Thái Nguyên 2,888.2 mm, Phù Liễn 1,525.2 mm). Phù Liễn 2024 = 2,111.5 mm, and ISD 2024 = 2,112 mm.
   - Comparison view (2016–2025): Pearson correlation of daily totals HAN 0.57, HPH 0.63, LCA 0.49, NBI 0.61, TNG 0.56. Agreement on rainy day (≥ 1 mm) is 60–74%. Open-Meteo has 1.5–2.1× more rainy days than the gauges (for example LCA 2,394 vs 1,138), consistent with reanalysis drizzle. Mean annual gauge totals were 1,741–1,932 mm.
 - Limits: daily resolution only (no hourly gauge rain); the 300 mm / 10% extreme rule rests on one observed failure and should be reviewed by the team; Hà Đông and Nam Định are not co-located with their research points; `observation_type`-style provenance for this table is the `station_role` column; no Power BI page uses the view yet.
+
+## RainNext24h label export to Gold ML (workbook ID 22) — 2026-10-21
+
+- Related work: workbook ID 22; `docs/rain-label.md` v0.2. The N1/N2 member approved: features from Open-Meteo only (GHCNh used later for verification), the dataset as Parquet in Gold ML, and EDA as a notebook. This work belongs to N3's ownership; it was done by the N1/N2 member with the agreement recorded here.
+- Changes: new `scripts/export_rain_labels.py`. It reads Silver Open-Meteo hourly data for the 8 canonical locations and refuses to publish if any location-month object is missing. It applies `build_rain_labels` and `assign_splits` (1 mm, `(t, t+24h]`, 24 valid hours, UTC splits with boundary purge) and writes `gold/ml_labels/rain_next24h_labels_v1.parquet`, which keeps excluded rows with a reason, plus a JSON manifest with scope, counts, and positive rates. New `tests/test_export_rain_labels.py` (2 unit tests: a full synthetic year with exact Yes/No origins around a rain hour and boundary purge; refusal on an incomplete Silver snapshot). Naming conventions and the rain-label document were updated.
+- Checks: `ruff check`/`format --check` passed; `make test` → 70 passed, 14 deselected.
+- Real data: `export_rain_labels.py --start-year 2016 --end-year 2025` took 16 s. Results:
+  - 701,376 rows, 700,800 usable, 576 `boundary_purge` (24 h × 8 locations × 3 boundaries).
+  - train 560,832 rows (2016-01-01T00Z → 2023-12-30T23Z), positive rate 50.89%.
+  - validation 70,080 rows, 49.42%.
+  - test 69,888 rows (through 2025-12-30T23Z), 49.03%.
+  These match the label-module run on independently downloaded API data earlier today.
+- Limits: labels are reanalysis rainfall, not gauge observations. No features yet (ID 23) and no EDA (ID 21).
