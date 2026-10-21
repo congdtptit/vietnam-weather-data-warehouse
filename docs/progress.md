@@ -573,3 +573,41 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
   - Full-chain query 1.6 s; single views 0.15–0.8 s.
 - Observations: Open-Meteo averages 156–211 rainy days per location-year. Meteostat HAN shows 57 hot days in 2024 versus 23 for Open-Meteo at HAN (station maximum temperatures are higher than the grid).
 - Limits: no Power BI artifact yet (ID 20). Local-year boundary rows (2016 partial, 2026 = 7 hours) need a year filter in BI. Views are plain (not materialized); ID 26 owns tuning.
+
+## Power BI v1 build guide (workbook ID 20) — 2026-10-21
+
+- Related work: workbook ID 20; `docs/task-specs-weeks-2-5.md` §3. Documentation only. Power BI Desktop cannot run on this macOS host, so **no `.pbix` was created and nothing was tested in Power BI**.
+- Changes: new `docs/powerbi-dashboard-v1.md` covering:
+  - two ways to reach the DW from Windows (local rebuild, or LAN connection to port 5434);
+  - Import of 3 dimensions plus `dim_time`, `vw_obs_daily`, `vw_obs_hourly`, and `vw_coverage`;
+  - relationships, date table, and hierarchy;
+  - DAX measures that return BLANK across multiple sources and average location totals instead of summing them;
+  - five pages mapped to slice, roll-up/drill-down, and dice;
+  - a reconciliation table.
+  The specification links to the guide.
+- Reference values: computed by read-only SQL on the live views (for example, HAN Open-Meteo 2024: 2,660.5 mm, 175 rainy days, 23 hot days, mean 24.62 °C; Meteostat HAN 2024: 25.16 °C, 57 hot days, rain BLANK). These are expected values for the future Power BI check, not evidence that the dashboard works.
+- Limits: DAX syntax and behaviour are unverified in Power BI Desktop; Option B requires a firewall change on the host; the `.pbix` storage location is undecided.
+
+## Station daily rainfall from NOAA GHCNh (workbook ID 9) — 2026-10-21
+
+- Related work: workbook ID 9 (NOAA part); `docs/data-contract.md` "Station daily rainfall"; `docs/task-specs-weeks-2-5.md` §4. The N1/N2 member approved: GHCNh instead of ISD; stations 48826→HPH, 48831→TNG, 48803→LCA, 48825 Hà Đông→HAN, 48823 Nam Định→NBI as a substitute; a separate daily table. Pre-merger province scope is unchanged.
+- Changes:
+  - `scripts/station_config.py`: new `GHCNH_RAIN_STATIONS` mapping, kept separate from the Meteostat canonical mapping; 48823 added to the registry.
+  - New `scripts/ingest_ghcnh.py`: raw bytes plus a JSON manifest (URL, retrieval time, size, SHA-256, rows); bounded retries for timeouts/429/5xx with `Retry-After`; 404 recorded; skip only when the stored object matches its manifest size; exit 1 on failure.
+  - New `scripts/transform_ghcnh_to_silver.py`: 24-hour totals at 12:00 UTC; quality codes 0/1/4 accepted; trace kept with `is_trace`; accumulated/deleted/missing/estimated/incomplete codes, out-of-range values, and off-schedule reports rejected and counted; duplicates resolved (identical collapsed, conflicting quarantined); unsupported extremes (≥ 300 mm without sub-daily support ≥ 10%) quarantined; per station-year coverage in the DQ report.
+  - New `scripts/load_station_daily_rain.py`: one transaction per station-year, set-based retraction plus upsert on `(source_key, station_key, rain_day_utc)`.
+  - New `sql/03_station_daily_rain.sql`: `dim_source` row `GHCNh`, `fact_station_daily_rain` with UNIQUE and CHECK constraints and indexes, and `vw_rain_station_vs_model`. The view compares with Open-Meteo over the same `(D-1 12:00, D 12:00]` UTC window and requires 24 model hours.
+  - `sql/01_init_postgres.sh` now applies every numbered `NN_*.sql` migration in order. Compose, `Dockerfile`, and `.dockerignore` include the new SQL file.
+  - New `tests/test_ghcnh.py`: 7 unit and 2 integration tests (rules and window, rejects, unsupported versus supported extremes, separate mapping, raw bytes and manifest, rerun skip, transient retry and permanent failure, missing Bronze with a manifest, DW rerun and retraction, view window alignment).
+  - Docs: data contract, naming conventions (GHCNh keys; ISD marked unused), warehouse schema, specification status.
+- Checks:
+  - `ruff check`/`format --check` passed.
+  - `make test` → 68 passed, 14 deselected.
+  - `make test-integration` → 14 passed.
+  - Migration applied twice without error.
+- Real data, 5 stations × 2016–2025, run on this machine:
+  - Ingest: 50/50 files stored (about 2.5 MB each), 0 not found, 0 failures. The run took 8,095 s, mostly while the host slept (no object written 08:18–09:40 UTC). Later runs used `PYTHONUNBUFFERED=1` in the local (non-repository) runner so progress is visible.
+  - Silver: 50 station-years, 0 failures, 14 s. Coverage was 95.89–99.18% of days in every station-year, versus 44–79% from ISD for Lào Cai and Hà Đông; 0 conflicting duplicates. One unsupported extreme was quarantined: 48823, 2023-10-13, 700.0 mm. Two `999.x` values (Phù Liễn 2019-10-09, 2020-10-18) were rejected as out of range.
+  - DW: 17,866 rows; a 2024 rerun and the post-rule reload both left counts consistent, and the 700 mm day was retracted. 2025 station-year totals equal an independent parse of the same GHCNh files done earlier (for example Thái Nguyên 2,888.2 mm, Phù Liễn 1,525.2 mm). Phù Liễn 2024 = 2,111.5 mm, and ISD 2024 = 2,112 mm.
+  - Comparison view (2016–2025): Pearson correlation of daily totals HAN 0.57, HPH 0.63, LCA 0.49, NBI 0.61, TNG 0.56. Agreement on rainy day (≥ 1 mm) is 60–74%. Open-Meteo has 1.5–2.1× more rainy days than the gauges (for example LCA 2,394 vs 1,138), consistent with reanalysis drizzle. Mean annual gauge totals were 1,741–1,932 mm.
+- Limits: daily resolution only (no hourly gauge rain); the 300 mm / 10% extreme rule rests on one observed failure and should be reviewed by the team; Hà Đông and Nam Định are not co-located with their research points; `observation_type`-style provenance for this table is the `station_role` column; no Power BI page uses the view yet.

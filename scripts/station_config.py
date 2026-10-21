@@ -75,7 +75,8 @@ STATION_REGISTRY: dict[str, dict[str, Any]] = {
         "status": "UNMAPPED_MISASSIGNED",
         "notes": (
             "Was mapped to PTO (Việt Trì) in Table 6. NOAA ISD 488250 HA DONG; Meteostat "
-            "coordinates match Hà Đông. Pending team decision"
+            "coordinates match Hà Đông. Pending team decision for Meteostat; used as the "
+            "GHCNh daily-rain station for HAN (see GHCNH_RAIN_STATIONS)"
         ),
     },
     "48830": {
@@ -135,6 +136,34 @@ STATION_REGISTRY: dict[str, dict[str, Any]] = {
         "elevation_m": 260.0,
         "status": "UNMAPPED_REGIONAL_NE",
         "notes": "Regional Northeast station; unmapped pending team decision",
+    },
+    "48823": {
+        "station_name": "Nam Định",
+        "location_code": None,
+        "latitude": 20.4330,
+        "longitude": 106.1500,
+        "elevation_m": 3.0,
+        "status": "UNMAPPED_GHCNH_ONLY",
+        "notes": (
+            "NOAA ISD 488230 NAM DINH; not served by Meteostat. Used only as the GHCNh "
+            "daily-rain substitute for NBI (see GHCNH_RAIN_STATIONS)"
+        ),
+    },
+}
+
+# Station-to-location mapping for NOAA GHCNh 24-hour station rainfall (workbook ID 9).
+# This mapping is separate from the Meteostat mapping above: GHCNh rain feeds its own
+# daily table, so a substitute station here never adds a second Meteostat station to a
+# location. Decided 2026-10-21 (docs/data-contract.md). Distances are to the research point.
+GHCNH_RAIN_STATIONS: dict[str, dict[str, Any]] = {
+    "48826": {"location_code": "HPH", "role": "representative", "distance_km": 7.6},
+    "48831": {"location_code": "TNG", "role": "representative", "distance_km": 1.7},
+    "48803": {"location_code": "LCA", "role": "representative", "distance_km": 1.6},
+    "48825": {"location_code": "HAN", "role": "nearest_available", "distance_km": 11.3},
+    "48823": {
+        "location_code": "NBI",
+        "role": "substitute_neighbouring_province",
+        "distance_km": 27.3,
     },
 }
 

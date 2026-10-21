@@ -17,11 +17,12 @@ if [ -f /docker-entrypoint-initdb.d/schema/init_dwh_schema.sql ]; then
     echo "=== [PostgreSQL Init] Star Schema applied successfully ==="
 fi
 
-# 3. Create OLAP views (idempotent; also applied manually to existing databases)
-if [ -f /docker-entrypoint-initdb.d/schema/02_olap_views.sql ]; then
-    echo "=== [PostgreSQL Init] Applying OLAP views to weather_dwh ==="
-    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "weather_dwh" -f /docker-entrypoint-initdb.d/schema/02_olap_views.sql
-    echo "=== [PostgreSQL Init] OLAP views applied successfully ==="
-fi
+# 3. Apply numbered migrations in order (02_olap_views.sql, 03_station_daily_rain.sql, ...).
+# Each is idempotent and is also applied manually to existing databases.
+for migration in /docker-entrypoint-initdb.d/schema/[0-9][0-9]_*.sql; do
+    [ -f "$migration" ] || continue
+    echo "=== [PostgreSQL Init] Applying $(basename "$migration") to weather_dwh ==="
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "weather_dwh" -f "$migration"
+done
 
 echo "=== [PostgreSQL Init] Database setup finished! ==="

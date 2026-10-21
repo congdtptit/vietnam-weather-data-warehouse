@@ -95,6 +95,8 @@ IDs 19 and 9 can run in parallel. ID 5 should be submitted immediately because C
 - For one day, one month, and one year, three numbers per page (rain total, mean temperature, rainy days) match the SQL views under identical filters; the check is recorded.
 - Each OLAP operation is demonstrable with filters visibly changing the data.
 
+**Build guide.** [Power BI dashboard v1 build guide](powerbi-dashboard-v1.md) (model, DAX, pages, reference values).
+
 **Open decisions.** Where the `.pbix` is stored; which machine refreshes it; whether a map is included in v1 (it needs ID 4 boundaries; points alone are possible earlier).
 
 ## 4. ID 9 — Station daily rainfall from NOAA GHCNh (N1, weeks 2–3, follow-up)
@@ -135,6 +137,8 @@ Mapping 48825 and 48823 to research points is a station-selection change to `scr
 - Bronze keeps each `.psv` file unchanged; Silver keeps the 24-hour series with quality flags; failed-QC values are excluded and counted.
 - A day without a report is **missing**, not 0 mm.
 - For comparison, Open-Meteo is aggregated over the same 12 UTC–12 UTC window (a view), not over the local calendar day.
+
+**Status (2026-10-21).** Implemented: `scripts/ingest_ghcnh.py`, `scripts/transform_ghcnh_to_silver.py`, `scripts/load_station_daily_rain.py`, `sql/03_station_daily_rain.sql`; results in [progress](progress.md).
 
 **Acceptance criteria.** Coverage report per station × year; first run and rerun produce identical row counts; for one station-year the yearly total matches the raw file; a comparison view returns daily station vs Open-Meteo rain for the five points.
 

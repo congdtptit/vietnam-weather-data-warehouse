@@ -13,6 +13,7 @@ Inventory date: 2026-10-08, based on `sql/init_dwh_schema.sql`. Distinguish exis
 | `dim_station` | PK `station_key`; UNIQUE `station_id`; FK `location_key` |
 | `fact_weather_observation` | PK `fact_id`; date/time/location/source/station FKs; nullable `station_key` |
 | `fact_weather_prediction` | PK `prediction_id`; prediction date/time, target date, and location FKs; model name/version |
+| `fact_station_daily_rain` (migration `sql/03_station_daily_rain.sql`) | PK `daily_rain_id`; UNIQUE `(source_key, station_key, rain_day_utc)`; FKs source/station/location; 24-hour gauge rain for `(D-1 12:00, D 12:00]` UTC; view `vw_rain_station_vs_model` |
 
 The DDL does not seed `dim_date`/`dim_station` and does not include `DimModel`. OLAP views live in `sql/02_olap_views.sql` (applied by the initializer for new databases and manually for existing ones): `vw_obs_hourly`, `vw_obs_daily`, `vw_obs_monthly`, `vw_obs_yearly`, `vw_coverage`, and helper `vw_calendar_month`. Fact schema existence does not establish data population.
 

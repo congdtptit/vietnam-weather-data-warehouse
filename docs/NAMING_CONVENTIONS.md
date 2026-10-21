@@ -106,7 +106,8 @@ Monthly examples apply to monthly requests. Current Open-Meteo ingestion downloa
 | **Open-Meteo** | `.json` | `open_meteo/hourly/year=YYYY/month=MM/open_meteo_<location>_hourly_<start_date>_<end_date>.json` | `bronze/open_meteo/hourly/year=2024/month=05/open_meteo_HAN_hourly_20240501_20240531.json` |
 | **ERA5 / ERA5-Land** | `.nc` | `era5/reanalysis/year=YYYY/month=MM/era5_north_vietnam_hourly_<YYYYMM>.nc` | `bronze/era5/reanalysis/year=2024/month=05/era5_north_vietnam_hourly_202405.nc` |
 | **Meteostat** | `.csv` | `meteostat/station_hourly/year=YYYY/meteostat_station_<station_id>_hourly_<YYYY>.csv` | `bronze/meteostat/station_hourly/year=2024/meteostat_station_48820_hourly_2024.csv` |
-| **NOAA** | `.csv` / `.txt` | `noaa/station_hourly/year=YYYY/noaa_station_<station_id>_hourly_<YYYY>.csv` | `bronze/noaa/station_hourly/year=2024/noaa_station_488200_hourly_2024.csv` |
+| **NOAA ISD** (not used; superseded by GHCNh) | `.csv` / `.txt` | `noaa/station_hourly/year=YYYY/noaa_station_<station_id>_hourly_<YYYY>.csv` | `bronze/noaa/station_hourly/year=2024/noaa_station_488200_hourly_2024.csv` |
+| **NOAA GHCNh** (implemented) | `.psv` + `.json` manifest | `ghcnh/station_hourly/year=YYYY/GHCNh_VMM000<wmo>_<YYYY>.psv`; manifest `ghcnh/manifests/year=YYYY/GHCNh_VMM000<wmo>_<YYYY>.json` | `bronze/ghcnh/station_hourly/year=2024/GHCNh_VMM00048826_2024.psv` |
 | **Boundary maps** | `.geojson` | `spatial/boundaries/<name>_<version>.geojson` | `bronze/spatial/boundaries/vietnam_northern_provinces_v1.geojson` |
 
 ---

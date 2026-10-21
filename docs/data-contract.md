@@ -17,6 +17,23 @@ Document version: v0.2, 2026-10-21. v0.2 confirms the Silver columns, units, UTC
 | Product-specific interval semantics and pressure/radiation mapping | Verify source metadata/documentation during implementation |
 | Additional lineage/DQ column names and types | Contract proposals requiring producer/consumer agreement |
 
+## Station daily rainfall (NOAA GHCNh)
+
+Decided 2026-10-21 (workbook ID 9; specification in [task specifications §4](task-specs-weeks-2-5.md)). This is a separate product from the hourly observations and never changes their grain.
+
+| Item | Contract |
+| --- | --- |
+| Source | NOAA NCEI GHCNh by-year PSV files (successor of ISD). Bronze keeps the received bytes plus a JSON manifest (URL, retrieval time, byte size, SHA-256, row count) |
+| Stations → research points | `GHCNH_RAIN_STATIONS` in `scripts/station_config.py`: 48826 Phù Liễn → HPH, 48831 Thái Nguyên → TNG, 48803 Lào Cai → LCA (representative); 48825 Hà Đông → HAN (nearest available, 11.3 km); 48823 Nam Định → NBI (substitute from the neighbouring pre-merger province, 27.3 km). PTO, TUQ, HBI have no station. This mapping is separate from the Meteostat mapping |
+| Variable | `precipitation_24_hour` (mm) from FM-12/SYNOP reports at 12:00 UTC. GHCNh has no hourly precipitation for these stations |
+| Grain and window | Source × station × rain day D (UTC); window `(D-1 12:00 UTC, D 12:00 UTC]` (19:00 Vietnam time) |
+| Accepted values | Quality code `0` (not checked), `1` (good), or `4` (calculated); measurement code empty or trace (`T`/`2`, value kept and `is_trace` set); 0 ≤ value < 999 mm. Suspect/erroneous/removed codes, letter QC flags, accumulated/deleted/missing/estimated/incomplete measurement codes, and off-schedule reports are rejected and counted |
+| Duplicates | Identical rows for the same day collapse; conflicting values are quarantined (`ghcnh/quarantine/...` in Silver) |
+| Unsupported extremes | A 24-hour total ≥ 300 mm is quarantined unless a sub-daily accumulation (3–21 h) reported inside the same window reaches ≥ 10% of it. Added 2026-10-21 after Nam Định 2023-10-13 reported 700.0 mm (quality code "good") with no sub-daily rain and 0.1 mm on both neighbouring days. Supported events such as 338 mm (Hà Đông 2016-05-25) and 491.3 mm (Thái Nguyên 2025-10-07) are kept. Quarantined rows keep `quarantine_reason` |
+| Missing data | A day without a usable report has no row: missing, never 0 mm |
+| DW | `fact_station_daily_rain` and `vw_rain_station_vs_model` (`sql/03_station_daily_rain.sql`); the view compares with Open-Meteo summed over the same UTC window and requires 24 model hours |
+| Use | Station-versus-model comparison in BI and reports. Not used for the hourly RainNext24h label |
+
 ## Grain, identifiers, and time
 
 - Target Silver observations are unique by `(source_name, location_code, timestamp_utc)`. Source names map consistently to `DimSource`. Raw station data may have another grain before station selection/aggregation.
