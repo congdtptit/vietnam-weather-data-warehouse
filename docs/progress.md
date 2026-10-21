@@ -624,3 +624,27 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
   - test 69,888 rows (through 2025-12-30T23Z), 49.03%.
   These match the label-module run on independently downloaded API data earlier today.
 - Limits: labels are reanalysis rainfall, not gauge observations. No features yet (ID 23) and no EDA (ID 21).
+
+## RainNext24h EDA notebook (workbook ID 21) — 2026-10-21
+
+- Related work: workbook ID 21 (N3's task, done by the N1/N2 member as agreed); `docs/rain-label.md` leakage rules.
+- Changes:
+  - New `scripts/rain_eda.py`: joins labels with Silver Open-Meteo variables at origin t plus trailing derivations (rain over the past 24 h, 24 h pressure change, dew-point depression), computed per location on a gap-checked grid. It also provides class balance, month × location rates, missingness, target distribution, standardized mean differences, and binned rates; summaries used for feature choice default to the train split.
+  - New `tests/test_rain_eda.py` (4 tests): only past/present hours are used, and changing data after t leaves t unchanged; a gap makes the trailing window missing; split filtering; duplicate rejection.
+  - New `notebooks/eda_rain_next24h.ipynb`, committed with executed outputs.
+  - New `requirements-notebook.in`/`.txt` (88 hashed pins, uv 0.8.22, universal for Python ≥ 3.10).
+  - `Makefile` targets `notebook-setup` and `notebook-run`; `.gitignore` ignores `.venv-*/`; `docs/development.md` notebook section.
+  - Charts follow the validated reference palette (single-series blue, sequential blue heatmap, blue/red diverging for signed SMD). Every chart is accompanied by its table. Charts were rendered and inspected; overlapping labels, a misleading zoomed y-axis on the hourly chart, and gridlines over bars were fixed.
+- Checks:
+  - `ruff check`/`format --check` passed; `make test` → 74 passed, 14 deselected.
+  - `make notebook-setup` succeeded on macOS x86_64 / Python 3.12.4 (72 s).
+  - `make notebook-run` executed all 9 code cells against the real Silver/Gold data with 0 errors.
+- Findings on train 2016–2023 (computed in the notebook):
+  - Yes share is 50.89% train, 49.42% validation, 49.03% test.
+  - Strong seasonality: the location mean is 78.2% in August and 25.6% in December. Lào Cai stays at 53–79% all year.
+  - The origin hour changes the Yes share by under 1 percentage point (50.5–51.3%).
+  - Next-24 h rain: 27.8% exactly zero, median 1.1 mm, q99 55.2 mm.
+  - No missing values at origin apart from the first trailing hours of 2016.
+  - Largest separations (|SMD|): dew point 0.81, past-24 h rain 0.76, humidity 0.75, pressure 0.73 (lower before rain), dew-point depression 0.70, cloud cover 0.66. Wind speed and solar radiation are near 0.
+  - Past-24 h rain bins rise from 17% (< 0.1 mm) to 92% (≥ 50 mm).
+- Limits: reanalysis inputs only; no feature set or model yet (IDs 23, 28). Notebook figures are static (no interactive layer). Validation/test statistics were not used for any choice.

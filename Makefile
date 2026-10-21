@@ -6,7 +6,7 @@ TEST_IMAGE := weather-tests:2.9.3-python3.10
 TEST_PROJECT ?= weather-tests
 TEST_COMPOSE := docker compose --env-file /dev/null -p $(TEST_PROJECT) -f docker-compose.test.yml
 
-.PHONY: help setup hooks lint format precommit config-check build test-build test test-integration check up down
+.PHONY: help setup hooks lint format precommit config-check build test-build test test-integration check up down notebook-setup notebook-run
 
 help:
 	@echo "setup            Create tooling venv (Python >=3.10)"
@@ -19,6 +19,8 @@ help:
 	@echo "test-integration Run disposable MinIO/PostgreSQL tests, then clean up"
 	@echo "check            Run lint and both test suites"
 	@echo "up / down        Start / stop development services (preserve volumes)"
+	@echo "notebook-setup   Create .venv-notebook from requirements-notebook.txt"
+	@echo "notebook-run     Execute notebooks/eda_rain_next24h.ipynb in place (needs MinIO data)"
 
 setup:
 	$(PYTHON) -c 'import sys; assert sys.version_info >= (3, 10), "Python >=3.10 required"'
@@ -63,3 +65,15 @@ up:
 
 down:
 	docker compose down
+
+NOTEBOOK_VENV := .venv-notebook/bin
+
+notebook-setup:
+	$(PYTHON) -c 'import sys; assert sys.version_info >= (3, 10), "Python >=3.10 required"'
+	$(PYTHON) -m venv .venv-notebook
+	$(NOTEBOOK_VENV)/python -m pip install --require-hashes -r requirements-notebook.txt
+	$(NOTEBOOK_VENV)/python -m ipykernel install --user --name weather-notebook --display-name "Weather (notebook)"
+
+notebook-run:
+	cd notebooks && ../$(NOTEBOOK_VENV)/jupyter nbconvert --to notebook --execute --inplace \
+		--ExecutePreprocessor.kernel_name=weather-notebook --ExecutePreprocessor.timeout=1800 eda_rain_next24h.ipynb
