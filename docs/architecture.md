@@ -34,7 +34,7 @@ Status as of 2026-10-21; [progress](progress.md) holds the commands, row counts,
 | ERA5, boundaries | Real NetCDF and 63-province (pre-merger) GeoJSON | No collectors yet; synthetic GeoJSON test fixture only |
 | Bronze/Silver/Gold | Contracted data layers | Script-based ETL for all three layers; Bronze still reserializes Open-Meteo payloads and has no manifests (ID 8) |
 | DW | Dimensions, facts, loading, and OLAP | DDL, seeds, idempotent loaders, OLAP views (`sql/02_olap_views.sql`, `sql/03_station_daily_rain.sql`); no Airflow DAG for Bronze → DW (ID 17) |
-| ML | CART, predictions in DW | RainNext24h labels and the v1 feature dataset in Gold ML, plus an EDA notebook; no model or prediction loading |
+| ML | CART, predictions in DW | RainNext24h labels, the v1 feature dataset, and CART model v1 (tuned on validation 2024) in Gold ML, plus an EDA notebook; no test evaluation or prediction loading |
 | BI | Power BI dashboards | Build guide `docs/powerbi-dashboard-v1.md`; no PBIX file |
 
 ## Runtime and connections

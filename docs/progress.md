@@ -679,3 +679,32 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
   - Independent check: 6 random rows (3 train, 3 validation) recomputed from the raw Silver monthly objects matched for `rain_past_6h_mm`, `rain_past_24h_mm`, `pressure_change_3h_hpa`, `humidity_percent_lag6h`, and `hour_local`.
 - Limits: features and labels both come from Open-Meteo reanalysis, so results are retrospective and the features are not proven available in real time. No imputation, encoding, or feature selection yet (ID 28, train only). The feature list was not reviewed by the team. A partial year range (for example only 2024) has no earlier history, so its first 23–24 origins per location miss the long-window features.
 - Next step: ID 28, train and tune CART on train with selection on validation 2024.
+
+## CART training and tuning (workbook ID 28) — 2026-10-21
+
+- Related work: workbook ID 28 (N3's task, done by the N1/N2 member as agreed); `docs/rain-label.md` v0.2. Decisions recorded on 2026-10-21: select by validation F1 of the Rain class; drop rows with missing features; no refit on train + validation.
+- Objective/scope: fit CART on train 2016–2023 and select parameters and the probability threshold on validation 2024. The test split was not read.
+- Changes:
+  - New `scripts/train_cart.py`. It reads the ID 23 manifest plus the train and validation files (`read_split` refuses `test`), drops rows with missing features, and builds a pipeline (unscaled numeric features + one-hot `location_code` → `DecisionTreeClassifier`). It fits a 120-configuration grid in parallel, selects the configuration and threshold, computes baselines, and writes `gold/ml_models/cart_rain_next24h_v1/model.joblib` and `report.json`.
+  - New `tests/test_train_cart.py` (4 tests): undefined metrics are `None`; tie handling for configuration and threshold; the test split is refused and never requested; reproducible training whose saved model reloads and predicts identically.
+  - Docs: `docs/rain-label.md` CART model v1 section; `docs/NAMING_CONVENTIONS.md` `ml_models` row; `README.md`; `docs/architecture.md`. Workbook ID 28: Đang làm, 90.
+- Checks: `ruff format`/`ruff check` passed; `make test` → 84 passed, 14 deselected.
+- Data (real): `train_cart.py` in the Airflow image (scikit-learn 1.5.1, 4 CPUs), 212 s.
+  - Train: 560,640 rows used, 192 dropped. Validation: 70,080 used, 0 dropped.
+  - Best F1 by depth limit: 4 → 0.763, 6 → 0.777, 8 → 0.781, 10 → 0.784, 12 → 0.785. The selection rule (within 0.005 of the best, shallowest wins) chose `max_depth=8`, `min_samples_leaf=50`, `class_weight=balanced`, `ccp_alpha=1e-4`: 88 leaves, a 19 KB artifact.
+  - Threshold 0.40 on validation: TP 28,476, FP 9,378, TN 26,066, FN 6,160; precision 0.752, recall 0.822, F1 0.786, accuracy 0.778. At 0.50: F1 0.781, recall 0.775.
+  - Baseline F1 on validation: persistence 0.753, location × month rate 0.710, always Yes 0.662; always No has recall 0.
+  - Train fit at 0.40: F1 0.793, so the gap to validation is small.
+  - Largest importances: `rain_past_12h_mm` 0.65, `dew_point_c` 0.12, `precipitation_mm` 0.10, `rain_past_24h_mm` 0.06, `pressure_hpa` 0.03.
+  - Validation breakdown (computed after selection, not used for choices):
+    - By location, F1 0.758 (HPH) to 0.812 (TNG).
+    - By season, wet season May–Oct F1 0.860 (recall 0.903); dry season Nov–Apr F1 0.602 (recall 0.624).
+    - Share of Rain cases detected by rain amount: 1–5 mm 72%, 5–20 mm 87%, ≥ 20 mm 94%.
+- Limits:
+  - Validation chose both the configuration and the threshold, so its metrics are optimistic.
+  - Independent evaluation on test 2025 is ID 29.
+  - Inputs and labels are Open-Meteo reanalysis, so the result is retrospective.
+  - The improvement over persistence is moderate (+3.3 F1 points), and dry-season performance is weak.
+  - The feature list, selection rule, and threshold have not been reviewed by the team.
+- Next step: ID 29, evaluate the frozen model and threshold once on test 2025; then ID 30, tree figure and rules.
+

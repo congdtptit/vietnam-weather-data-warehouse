@@ -1,6 +1,6 @@
 # RainNext24h and Evaluation Methodology
 
-Version v0.2, 2026-10-21 (label decisions confirmed by the project member working on N1/N2 on 2026-10-21; that member accepted their confirmation as team approval). Original draft v0.1: 2026-10-08. The proposal requires CART classification of rain/no-rain within the next 24 hours. This document records established decisions and items requiring team agreement. Label generation and split purging are implemented in `scripts/rain_labels.py` (tests: `tests/test_rain_labels.py`) and exported to Gold ML by `scripts/export_rain_labels.py` (`gold/ml_labels/rain_next24h_labels_v1.parquet` with a JSON manifest). Exploratory analysis of the train split is in `notebooks/eda_rain_next24h.ipynb` (helpers: `scripts/rain_eda.py`). The feature dataset v1 is built by `scripts/build_rain_features.py` (see below); no model or DW prediction implementation exists yet.
+Version v0.2, 2026-10-21 (label decisions confirmed by the project member working on N1/N2 on 2026-10-21; that member accepted their confirmation as team approval). Original draft v0.1: 2026-10-08. The proposal requires CART classification of rain/no-rain within the next 24 hours. This document records established decisions and items requiring team agreement. Label generation and split purging are implemented in `scripts/rain_labels.py` (tests: `tests/test_rain_labels.py`) and exported to Gold ML by `scripts/export_rain_labels.py` (`gold/ml_labels/rain_next24h_labels_v1.parquet` with a JSON manifest). Exploratory analysis of the train split is in `notebooks/eda_rain_next24h.ipynb` (helpers: `scripts/rain_eda.py`). The feature dataset v1 is built by `scripts/build_rain_features.py`, and CART model v1 is trained and tuned on train/validation by `scripts/train_cart.py` (see below). Test evaluation (ID 29) and DW prediction loading are not implemented yet.
 
 ## Decisions and status
 
@@ -59,6 +59,31 @@ The rainfall threshold in mm defines ground truth. The probability threshold def
 - Freeze artifacts/features/threshold/label contract before test evaluation. If test results change the design, disclose that test participated in development.
 - Workbook ID 29 mentions threshold adjustment alongside test 2025. Choose the threshold on validation 2024 and reserve test for evaluation. The workbook was not edited during documentation organization.
 - ID 36 (week 9) requests error analysis and threshold comparisons: threshold selection must still use validation. Disclose post-analysis on test; if test results change the design, do not claim independent test evaluation. See [business reconciliation](business-requirements.md).
+
+### CART model v1 (ID 28, trained 2026-10-21)
+
+Procedure agreed on 2026-10-21 by the N1/N2 member doing N3's ML work:
+
+- Inputs: the v1 train and validation feature files only; the test file is not read (`report.json` records `test_split_read: false`). Rows with a missing feature are dropped (192 train rows, the first 24 origin hours of 2016); nothing is imputed.
+- Pipeline: the 22 numeric features unscaled plus one-hot `location_code`, then `DecisionTreeClassifier(random_state=42)`. Fit on train only; no refit on train + validation.
+- Grid (120 fits): `max_depth` {4, 6, 8, 10, 12} × `min_samples_leaf` {50, 200, 1000} × `class_weight` {None, balanced} × `ccp_alpha` {0, 1e-5, 1e-4, 1e-3}.
+- Selection: highest validation F1 of the Rain class at probability 0.5. Configurations within 0.005 F1 of the best count as tied, and the shallowest, then smallest, tree is chosen.
+- Probability threshold: the value from 0.30 to 0.70 (step 0.02) with the highest validation F1 for the selected model; ties go to the value closest to 0.5.
+- Baselines on validation: always No, always Yes, persistence (past 24 h rain ≥ 1 mm), and the train-period Rain rate by location × month (Yes when ≥ 0.5).
+- Artifacts: `gold/ml_models/cart_rain_next24h_v1/model.joblib` (preprocessing + tree) and `report.json` (features and units in order, parameters, threshold, seed, dependency versions, grid results, validation metrics, baselines). Load the joblib file only from this bucket, because loading can execute code.
+
+Result: `max_depth=8`, `min_samples_leaf=50`, `class_weight=balanced`, `ccp_alpha=1e-4`; 88 leaves; probability threshold 0.40 (frozen for ID 29). Validation 2024 has 70,080 rows, of which 49.4% are Rain:
+
+| Predictor | Precision | Recall | F1 | Accuracy |
+| --- | --- | --- | --- | --- |
+| CART v1, threshold 0.40 | 0.752 | 0.822 | 0.786 | 0.778 |
+| CART v1, threshold 0.50 | 0.787 | 0.775 | 0.781 | 0.785 |
+| Persistence (past 24 h ≥ 1 mm) | 0.752 | 0.754 | 0.753 | 0.755 |
+| Location × month Rain rate | 0.704 | 0.716 | 0.710 | 0.711 |
+| Always Yes | 0.494 | 1.000 | 0.662 | 0.494 |
+| Always No | undefined | 0.000 | undefined | 0.506 |
+
+Validation chose both the configuration and the threshold, so these figures are optimistic; the independent estimate is the 2025 test evaluation (ID 29).
 
 ## Artifacts and acceptance
 
