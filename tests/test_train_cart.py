@@ -79,6 +79,12 @@ def _client():
 
     client.get_object.side_effect = get
     client.put_object.side_effect = put
+
+    def stat(bucket, key):
+        if key not in store:
+            raise S3Error("NoSuchKey", "missing", "/r", "req", "host", None)
+
+    client.stat_object.side_effect = stat
     return client, store
 
 
@@ -146,3 +152,20 @@ def test_training_is_reproducible_and_the_saved_model_reloads():
     train_cart(grid=GRID, n_jobs=1, client=client2)
     again = joblib.load(io.BytesIO(store2[model_key])).predict_proba(x)[:, 1]
     np.testing.assert_array_equal(first, again)
+
+
+def test_existing_model_is_not_overwritten_and_a_tested_model_is_frozen():
+    client, store = _client()
+    train_cart(grid=GRID, n_jobs=1, client=client)
+    model_key, report_key = model_keys()
+    saved = store[model_key]
+
+    with pytest.raises(RuntimeError, match="already exist"):
+        train_cart(grid=GRID, n_jobs=1, client=client)
+    assert store[model_key] == saved
+
+    train_cart(grid=GRID, n_jobs=1, client=client, overwrite=True)  # untested: allowed
+
+    store[model_key.replace("model.joblib", "test_evaluation.json")] = b"{}"
+    with pytest.raises(RuntimeError, match="frozen"):
+        train_cart(grid=GRID, n_jobs=1, client=client, overwrite=True)

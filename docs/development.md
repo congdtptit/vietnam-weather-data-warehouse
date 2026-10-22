@@ -87,10 +87,10 @@ To start development services, create `.env` from `.env.example` if missing, the
 - Unit tests mock API/MinIO/subprocess and block sockets. They check UTC/units, retry behavior, ingestion scope, and subprocess status. Runtime tests cover Parquet/NetCDF/GeoJSON/CART. DAG tests check imports/dependencies without executing historical DAGs.
 - `docker-compose.test.yml` is **standalone**: project `weather-tests`, DB `weather_test`, test credentials, PostgreSQL/MinIO tmpfs, internal network, no host ports, bind mounts, or development volumes. Do not combine it with main Compose.
 - `make test-integration` ignores `.env`, applies the existing schema, and runs ingestion with mocked APIs against test services. It cleans up on success/failure and prints logs before cleanup on failure. Use `make test-integration TEST_PROJECT=weather-tests-alice` for a separate test project.
-- Integration fixtures check test host/database/user before connecting. They initialize schema and verify seed reruns, uniqueness/FKs, health tasks, and one Bronze-object rerun. A real DW loader is not tested because none exists.
+- Integration fixtures check test host/database/user before connecting. They apply the base schema and every numbered migration in initializer order, and verify reruns of that sequence, uniqueness/FKs, health tasks, one Bronze-object rerun, the Gold/DW loader (location-filtered reruns, retraction of removed rows and of a source missing from Silver, transaction recovery), the GHCNh and prediction loaders, and the OLAP views on synthetic rows.
 - Pytest requires the `WEATHER_TESTING=1` guard, configured in the test image/Compose. Use `make test` rather than native pytest without required libraries.
 
-Tests do not establish historical data quality or CART accuracy. Masked per-file failures, size-based skipping, and Bronze-payload modification remain [documented limitations](progress.md), not fixes delivered by test setup.
+Tests do not establish historical data quality or CART accuracy. Size-based skipping and Bronze-payload modification remain [documented limitations](progress.md), not fixes delivered by test setup. Masked per-file Open-Meteo failures were fixed on 2026-10-22.
 
 ## Tooling dependencies
 

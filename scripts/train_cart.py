@@ -39,6 +39,7 @@ import numpy as np
 import pandas as pd
 import sklearn
 from build_rain_features import FEATURE_VERSION, features_keys
+from export_rain_labels import object_exists, refuse_overwrite
 from joblib import Parallel, delayed
 from load_gold_observations import BUCKET_GOLD, get_minio_client
 from minio import Minio
@@ -207,8 +208,17 @@ def train_cart(
     grid: dict[str, list[Any]] | None = None,
     n_jobs: int = -1,
     client: Minio | None = None,
+    overwrite: bool = False,
 ) -> dict[str, Any]:
     client = client or get_minio_client()
+    model_key, report_key = model_keys(version)
+    # A model evaluated on test is frozen: its SHA-256 is recorded in the evaluation and DW
+    evaluation_key = f"ml_models/cart_rain_next24h_{version}/test_evaluation.json"
+    if object_exists(client, evaluation_key):
+        raise RuntimeError(
+            f"model {version} is frozen ({evaluation_key} exists); use a new --version"
+        )
+    refuse_overwrite(client, [model_key, report_key], overwrite)
     manifest = read_feature_manifest(client, feature_version)
     features = [f["name"] for f in manifest["features"]]
     train, train_dropped = drop_missing(read_split(client, "train", feature_version), features)
@@ -237,7 +247,6 @@ def train_cart(
         key=lambda x: -x[1],
     )
 
-    model_key, report_key = model_keys(version)
     buf = io.BytesIO()
     joblib.dump(model, buf)
     data = buf.getvalue()
@@ -308,9 +317,14 @@ def main() -> int:
     parser.add_argument("--feature-version", default=FEATURE_VERSION)
     parser.add_argument("--version", default=MODEL_VERSION, help="Model version tag")
     parser.add_argument("--n-jobs", type=int, default=-1, help="Parallel grid fits")
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Replace an untested model of this version (never allowed after test evaluation)",
+    )
     args = parser.parse_args()
     try:
-        train_cart(args.feature_version, args.version, n_jobs=args.n_jobs)
+        train_cart(args.feature_version, args.version, n_jobs=args.n_jobs, overwrite=args.overwrite)
     except (RuntimeError, ValueError) as ex:
         print(f"[!] {ex}")
         return 1

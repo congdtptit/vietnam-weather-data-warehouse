@@ -64,3 +64,14 @@ def test_rescore_refuses_changed_features_or_old_labels():
     store[key] = buf.getvalue()
     with pytest.raises(ValueError, match="v0.2.1"):
         rescore(feature_version="v2", client=client)
+
+
+def test_rescore_refuses_a_model_that_is_not_the_evaluated_one():
+    from train_cart import model_keys
+
+    client, store = _evaluated_client()
+    model_key, _ = model_keys()
+    store[model_key] = store[model_key] + b"\0"  # different bytes, different SHA-256
+    with pytest.raises(ValueError, match="differs from the one evaluated"):
+        rescore(feature_version="v2", client=client)
+    assert corrected_evaluation_key() not in store

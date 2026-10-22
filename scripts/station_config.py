@@ -18,7 +18,8 @@ CANONICAL_LOCATIONS: set[str] = {
     "NBI",  # Ninh Bình
 }
 
-# Unified station registry shared between ingestion and transformation.
+# Unified station registry shared between ingestion and transformation. Canonical stations
+# carry their role and great-circle distance to the research point, as GHCNH_RAIN_STATIONS does.
 # Station identities, coordinates, and elevations were verified on 2026-10-21 against
 # Meteostat station metadata (https://data.meteostat.net/stations/<id>.json) and the
 # NOAA ISD station history (isd-history.csv, USAF = WMO id + "0"). Meteostat coordinates
@@ -27,15 +28,19 @@ CANONICAL_LOCATIONS: set[str] = {
 # below with their verified identity and are no longer mapped to a research location.
 STATION_REGISTRY: dict[str, dict[str, Any]] = {
     "48820": {
-        "station_name": "Hà Nội",
+        "station_name": "Nội Bài (Hà Nội)",
         "location_code": "HAN",
-        "latitude": 21.0167,
-        "longitude": 105.8000,
-        "elevation_m": 6.0,
+        "latitude": 21.2210,
+        "longitude": 105.8070,
+        "elevation_m": 11.9,
         "status": "CANONICAL",
+        "role": "nearest_available",
+        "distance_km": 22.0,
         "notes": (
-            "Meteostat 'Ha Noi' (ICAO VVNB). NOAA ISD names 488200 'NOIBAI INTL' at "
-            "21.221, 105.807; coordinates follow Meteostat, the ingested source"
+            "Meteostat 'Ha Noi' lists 21.0167, 105.8000, 6 m (the WMO 48820 position), but its "
+            "hourly values come from NOAA ISD 488200 'NOIBAI INTL' (isd_lite) and METAR VVNB, "
+            "i.e. Nội Bài airport at 21.221, 105.807, 11.9 m (isd-history.csv). Coordinates "
+            "follow the observing site since 2026-10-22; about 22 km from the HAN point"
         ),
     },
     "48826": {
@@ -45,6 +50,8 @@ STATION_REGISTRY: dict[str, dict[str, Any]] = {
         "longitude": 106.6333,
         "elevation_m": 119.0,
         "status": "CANONICAL",
+        "role": "representative",
+        "distance_km": 7.6,
         "notes": "Meteostat 'Phu Lien'; NOAA ISD 488260 PHU LIEN. Table 6 listed it under TNG",
     },
     "48831": {
@@ -54,6 +61,8 @@ STATION_REGISTRY: dict[str, dict[str, Any]] = {
         "longitude": 105.8330,
         "elevation_m": 32.0,
         "status": "CANONICAL",
+        "role": "representative",
+        "distance_km": 1.7,
         "notes": "NOAA ISD 488310 THAI NGUYEN; not served by Meteostat (HTTP 404)",
     },
     "48803": {
@@ -63,6 +72,8 @@ STATION_REGISTRY: dict[str, dict[str, Any]] = {
         "longitude": 103.9670,
         "elevation_m": 97.0,
         "status": "CANONICAL",
+        "role": "representative",
+        "distance_km": 1.6,
         "notes": "NOAA ISD 488030 LAO CAI; not served by Meteostat (HTTP 404)",
     },
     # Ids previously assigned in Table 6 whose verified identity is a different station.

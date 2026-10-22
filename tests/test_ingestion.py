@@ -83,3 +83,27 @@ def test_unknown_location_is_rejected(ingestion, monkeypatch):
     with pytest.raises(ValueError):
         ingestion.ingest_data(2024, 2024, target_location="UNKNOWN")
     fetch.assert_not_called()
+
+
+def test_failed_file_is_reported_after_the_rest_are_attempted(
+    ingestion, hourly_payload, monkeypatch
+):
+    from minio.error import S3Error
+
+    client = Mock()
+    client.stat_object.side_effect = S3Error("NoSuchKey", "missing", "/", "req", "host", None)
+    fetch = Mock(side_effect=[RuntimeError("synthetic outage"), hourly_payload])
+    monkeypatch.setattr(ingestion, "get_minio_client", lambda: client)
+    monkeypatch.setattr(ingestion, "fetch_open_meteo_year", fetch)
+    with pytest.raises(RuntimeError, match="completed with 1 failure"):
+        ingestion.ingest_data(2024, 2025, target_location="HAN")
+    assert fetch.call_count == 2
+    client.put_object.assert_called_once()  # 2025 still uploaded
+
+
+def test_client_error_is_not_retried(ingestion, monkeypatch):
+    get = Mock(return_value=response(400))
+    monkeypatch.setattr(ingestion.requests, "get", get)
+    with pytest.raises(RuntimeError, match="HTTP 400"):
+        ingestion.fetch_open_meteo_year(21.0, 105.0, 2024, max_retries=3)
+    assert get.call_count == 1

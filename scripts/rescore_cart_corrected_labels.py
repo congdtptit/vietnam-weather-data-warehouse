@@ -18,6 +18,7 @@ Output (bucket gold):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import sys
@@ -61,7 +62,11 @@ def rescore(
     report = json.loads(_get(client, report_key))
     original = json.loads(_get(client, eval_key))
     stored = pd.read_parquet(io.BytesIO(_get(client, pred_key)))
-    model = joblib.load(io.BytesIO(_get(client, model_key)))
+    model_bytes = _get(client, model_key)
+    model_sha256 = hashlib.sha256(model_bytes).hexdigest()
+    if model_sha256 != original["model_sha256"]:
+        raise ValueError("model artifact differs from the one evaluated on test")
+    model = joblib.load(io.BytesIO(model_bytes))
     features = [f["name"] for f in report["features"]]
     cols = [*features, "location_code"]
     threshold = float(report["probability_threshold"])
@@ -103,7 +108,7 @@ def rescore(
     result = {
         "model_name": report["model_name"],
         "model_version": version,
-        "model_sha256": original["model_sha256"],
+        "model_sha256": model_sha256,
         "probability_threshold": threshold,
         "reason": "ground-truth correction: rain_next24h_v0.2 labelled exact 1.0 mm windows No "
         "because of float sums; labels rebuilt as " + LABEL_VERSION,

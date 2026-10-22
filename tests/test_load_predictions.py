@@ -1,7 +1,7 @@
 """Tests for sql/04_predictions.sql and scripts/load_predictions.py (workbook ID 31).
 
-Unit tests use synthetic frames. Integration tests run in one transaction that is rolled
-back, so the shared test database keeps its original schema.
+Unit tests use synthetic frames. Integration tests reapply the migrations and load in one
+transaction that is rolled back, so the shared test database keeps its rows.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -94,6 +94,22 @@ def test_model_row_requires_matching_versions_and_threshold():
     assert model_row(REPORT, EVALUATION)[14] == "a" * 64
 
 
+def test_model_row_records_which_labels_each_metric_used():
+    original = model_row(REPORT, EVALUATION)
+    assert original[3] == "rain_next24h_v0.2" and original[-2:] == ("rain_next24h_v0.2", 0.786)
+    corrected = model_row(
+        REPORT,
+        {
+            **EVALUATION,
+            "label_version": "rain_next24h_v0.2.1",
+            "validation_metrics_at_threshold_corrected_labels": {"f1": 0.78871},
+        },
+    )
+    assert corrected[3] == "rain_next24h_v0.2"  # training/selection labels unchanged
+    assert corrected[15] == 0.786  # selection F1 unchanged
+    assert corrected[-2:] == ("rain_next24h_v0.2.1", 0.7887)
+
+
 # --- integration ------------------------------------------------------------------------
 
 
@@ -117,9 +133,10 @@ class _NoCommit:
 def pred_db(pg_connection):
     cur = pg_connection.cursor()
     try:
-        migration = (ROOT / "sql" / "04_predictions.sql").read_text()
-        cur.execute(migration)
-        cur.execute(migration)  # idempotent
+        for name in ("04_predictions.sql", "05_metadata_corrections.sql"):
+            migration = (ROOT / "sql" / name).read_text()
+            cur.execute(migration)
+            cur.execute(migration)  # idempotent
         cur.execute(
             """
             INSERT INTO dim_date (date_key, full_date, day_of_week, day_name, day_of_month,

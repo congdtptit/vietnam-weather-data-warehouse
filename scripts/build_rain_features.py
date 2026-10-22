@@ -33,7 +33,7 @@ from typing import Any
 
 import pandas as pd
 from export_rain_labels import DATASET_VERSION as LABEL_DATASET_VERSION
-from export_rain_labels import LABEL_SOURCE, labels_keys, read_open_meteo_silver
+from export_rain_labels import LABEL_SOURCE, labels_keys, read_open_meteo_silver, refuse_overwrite
 from load_gold_observations import BUCKET_GOLD, get_minio_client
 from minio import Minio
 from rain_labels import LABEL_VERSION, SPLITS, round_rain
@@ -152,7 +152,9 @@ def compute_features(hourly: pd.DataFrame) -> pd.DataFrame:
     return out[["location_code", "origin_utc", *FEATURES]]
 
 
-def build_feature_dataset(labels: pd.DataFrame, hourly: pd.DataFrame) -> pd.DataFrame:
+def build_feature_dataset(
+    labels: pd.DataFrame, hourly: pd.DataFrame, version: str = FEATURE_VERSION
+) -> pd.DataFrame:
     """Join usable labels with the features at their origin."""
     if (labels["label_version"] != LABEL_VERSION).any():
         raise ValueError(f"labels are not {LABEL_VERSION}; rebuild labels before features")
@@ -167,7 +169,7 @@ def build_feature_dataset(labels: pd.DataFrame, hourly: pd.DataFrame) -> pd.Data
     if no_origin:
         raise ValueError(f"{no_origin} usable labels have no hourly origin row in Silver")
     data = data.drop(columns="_merge")
-    data["feature_version"] = FEATURE_VERSION
+    data["feature_version"] = version
     cols = [
         *ID_COLUMNS,
         *FEATURES,
@@ -216,20 +218,22 @@ def export_features(
     version: str = FEATURE_VERSION,
     label_dataset_version: str = LABEL_DATASET_VERSION,
     client: Minio | None = None,
+    overwrite: bool = False,
 ) -> dict[str, Any]:
     client = client or get_minio_client()
+    split_keys, manifest_key = features_keys(version)
+    refuse_overwrite(client, [*split_keys.values(), manifest_key], overwrite)
     labels = read_labels(client, label_dataset_version)
     first = pd.Timestamp(year=start_year, month=1, day=1, tz="UTC")
     after = pd.Timestamp(year=end_year + 1, month=1, day=1, tz="UTC")
     labels = labels[(labels["origin_utc"] >= first) & (labels["origin_utc"] < after)]
     hourly = read_open_meteo_silver(client, start_year, end_year, columns=SILVER_COLUMNS)
-    dataset = build_feature_dataset(labels, hourly)
+    dataset = build_feature_dataset(labels, hourly, version)
 
     usable_labels = int(labels["exclusion_reason"].isna().sum())
     if len(dataset) != usable_labels:
         raise ValueError(f"{len(dataset)} feature rows for {usable_labels} usable labels")
 
-    split_keys, manifest_key = features_keys(version)
     objects = {}
     for split, g in dataset.groupby("split"):
         buf = io.BytesIO()
@@ -285,9 +289,18 @@ def main() -> int:
     parser.add_argument(
         "--label-version", default=LABEL_DATASET_VERSION, help="Label dataset version to read"
     )
+    parser.add_argument(
+        "--overwrite", action="store_true", help="Replace an existing dataset of this version"
+    )
     args = parser.parse_args()
     try:
-        export_features(args.start_year, args.end_year, args.version, args.label_version)
+        export_features(
+            args.start_year,
+            args.end_year,
+            args.version,
+            args.label_version,
+            overwrite=args.overwrite,
+        )
     except (RuntimeError, ValueError) as ex:
         print(f"[!] {ex}")
         return 1

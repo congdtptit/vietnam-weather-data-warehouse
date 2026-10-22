@@ -108,7 +108,10 @@ def pg_connection():
     )
     try:
         with connection, connection.cursor() as cursor:
+            # Same order as sql/01_init_postgres.sh: base schema, then numbered migrations
             cursor.execute((ROOT / "sql/init_dwh_schema.sql").read_text())
+            for migration in sorted((ROOT / "sql").glob("[0-9][0-9]_*.sql")):
+                cursor.execute(migration.read_text())
         yield connection
     finally:
         connection.close()

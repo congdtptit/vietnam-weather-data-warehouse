@@ -8,7 +8,7 @@ README này dùng tiếng Việt theo yêu cầu của dự án. Code và tài l
 
 ## Trạng thái hiện tại
 
-Cập nhật ngày **2026-10-21**. Bằng chứng chi tiết (lệnh đã chạy, số dòng, thời gian chạy, hạn chế) nằm trong [nhật ký tiến độ](docs/progress.md). Đã có:
+Cập nhật ngày **2026-10-22**. Bằng chứng chi tiết (lệnh đã chạy, số dòng, thời gian chạy, hạn chế) nằm trong [nhật ký tiến độ](docs/progress.md). Đã có:
 
 - Docker Compose cho MinIO, PostgreSQL và Airflow; Dockerfile Airflow 2.9.3/Python 3.10 với dependency được khóa phiên bản và checksum.
 - Khởi tạo bucket Bronze/Silver/Gold, DDL Star Schema và seed dimension; danh mục trạm đã xác minh trong `scripts/station_config.py`.
@@ -17,10 +17,11 @@ Cập nhật ngày **2026-10-21**. Bằng chứng chi tiết (lệnh đã chạy
 - View OLAP giờ/ngày/tháng/năm và độ phủ (`sql/02_olap_views.sql`); hướng dẫn dựng Power BI v1 (`docs/powerbi-dashboard-v1.md`). File PBIX chưa có.
 - Nhãn RainNext24h (ngưỡng 1 mm, chia train/validation/test theo năm UTC, purge biên) xuất ra Gold ML; notebook EDA `notebooks/eda_rain_next24h.ipynb` với môi trường riêng (`make notebook-setup`); bộ 22 đặc trưng không rò rỉ dữ liệu tương lai trong `gold/ml_features/` (3 file theo tập train/validation/test); mô hình CART v1 đã train, chọn tham số trên validation 2024 và đánh giá một lần trên test 2025 (F1 0,777, Recall 0,792 với nhãn đã sửa lỗi làm tròn ngày 22/10; mốc dự báo theo hiện trạng F1 0,729); hình cây và luật trong `notebooks/cart_tree_rules.ipynb`; dự đoán test 2025 đã nạp vào `fact_weather_prediction` cùng `dim_model` và view `vw_prediction_vs_actual`.
 - Ruff, pre-commit, Makefile, pytest và cấu hình GitHub Actions; tài liệu nghiệp vụ và đặc tả task tuần 2–5.
+- Đợt rà soát ngày 22/10 đã sửa: các script ML không còn ghi đè model, nhãn hay đặc trưng đã có; tải Open-Meteo và bước Silver báo lỗi (mã thoát 1) khi thiếu file; loader DW xóa dữ liệu theo phạm vi được yêu cầu, không theo dữ liệu đến; trạm 48820 được ghi đúng là sân bay Nội Bài (cách điểm HAN 22 km); migration `05_metadata_corrections.sql` thêm `pressure_type`, vai trò và khoảng cách trạm, cùng phiên bản nhãn dùng cho chỉ số test trong `dim_model`; DAX đếm ngày mưa/nóng trong hướng dẫn Power BI trả về 0 thay vì trống. Các việc cần nhóm quyết định nằm ở [business requirements §5a](docs/business-requirements.md#5a-proposals-awaiting-team-decision-2026-10-22).
 
-Dữ liệu thực 2016–2025 đã được dựng lại trên một máy cục bộ ngày 2026-10-21: DW có 788.861 dòng quan sát giờ (Open-Meteo 8 vị trí; Meteostat chỉ Hà Nội và không có mưa), 17.866 dòng mưa ngày GHCNh, 700.800 nhãn dùng được. Lần kiểm tra gần nhất: `make test` 74 test đạt, `make test-integration` 14 test đạt.
+Dữ liệu thực 2016–2025 đã được dựng lại trên một máy cục bộ ngày 2026-10-21: DW có 788.861 dòng quan sát giờ (Open-Meteo 8 vị trí; Meteostat chỉ Hà Nội và không có mưa), 17.866 dòng mưa ngày GHCNh, 700.800 nhãn dùng được. Lần kiểm tra gần nhất (22/10): `make test` 118 test đạt, `make test-integration` 18 test đạt.
 
-**Chưa hoàn chỉnh**: ERA5, địa giới GeoJSON thực (63 tỉnh, trước sáp nhập), lưu payload gốc Bronze kèm manifest, DAG Bronze → DW, bảng dự báo trong DW và dashboard Power BI. Nhãn và đặc trưng dựa trên dữ liệu tái phân tích, chưa phải số đo trạm. Trạng thái nghiệm thu từng task do bảng phân công quản lý, không suy ra từ việc có file.
+**Chưa hoàn chỉnh**: ERA5 (NetCDF) và địa giới GeoJSON thực (63 tỉnh, trước sáp nhập; chờ nhóm xác nhận) chưa bắt đầu, nên mục tiêu đa định dạng chưa đạt; lưu payload gốc Bronze kèm manifest (Open-Meteo, Meteostat); DAG Bronze → DW; DAG chấm điểm dự báo (task 32); dashboard Power BI và trang dự báo (task 33). Model v1 tối ưu F1, chưa có quy tắc ưu tiên Recall (đề xuất chờ duyệt). Nhãn và đặc trưng dựa trên dữ liệu tái phân tích, chưa phải số đo trạm. Trạng thái nghiệm thu từng task do bảng phân công quản lý, không suy ra từ việc có file.
 
 ## Tài liệu và phân công
 
@@ -179,7 +180,8 @@ Test_DL_weather/
 │   ├── init_dwh_schema.sql
 │   ├── 02_olap_views.sql
 │   ├── 03_station_daily_rain.sql
-│   └── 04_predictions.sql
+│   ├── 04_predictions.sql
+│   └── 05_metadata_corrections.sql
 ├── notebooks/                     # Notebook EDA, cây và luật CART
 ├── tests/                         # Test offline/integration và fixture
 ├── plugins/                       # Thư mục plugin Airflow

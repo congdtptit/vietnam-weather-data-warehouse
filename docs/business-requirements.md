@@ -1,6 +1,6 @@
 # Weather Data Platform: Business Requirements
 
-Version 0.1, 2026-10-10. This document translates the proposal and task allocation into business workflows and acceptance criteria for incremental implementation. Additional technical acceptance criteria are implementation proposals. Open decisions must be recorded in the relevant domain contract before use.
+Version 0.2, 2026-10-22 (0.1: 2026-10-10). This document translates the proposal and task allocation into business workflows and acceptance criteria for incremental implementation. Additional technical acceptance criteria are implementation proposals. Open decisions must be recorded in the relevant domain contract before use.
 
 ## 1. Sources and authority
 
@@ -10,7 +10,7 @@ Version 0.1, 2026-10-10. This document translates the proposal and task allocati
 | [Task allocation workbook](../Phan_cong_cong_viec_DW_khi_tuong.xlsx) | Task IDs, weeks, owners, support, and outputs | `Theo dõi công việc!A5:O44`, `Vai trò!A3:D9`, `Rủi ro!A3:F13` |
 | [Data contract](data-contract.md) | Columns, grain, UTC, units, missing/duplicate data, and provenance | Distinguishes established conventions from proposals |
 | [Warehouse schema](warehouse-schema.md) | Keys, calendars, loading, and aggregation rules | Distinguishes existing DDL from required migrations |
-| [Rain label](rain-label.md) | Labels, features, splits, and CART evaluation | Identifies unresolved label decisions |
+| [Rain label](rain-label.md) | Labels, features, splits, and CART evaluation | Records label decisions and the items still open |
 | [Naming conventions](NAMING_CONVENTIONS.md) | Buckets, object keys, and partitions | Documents actual and target paths |
 | [Progress](progress.md) | Implementation and verification evidence | Determines what has actually been completed |
 | [Task specifications, weeks 2–5](task-specs-weeks-2-5.md) | Proposed business specifications for IDs 19, 20, 9, 17, 8, 4, 5 | Proposals until confirmed in the owning document |
@@ -33,7 +33,7 @@ The system serves two business needs: analyze historical weather by time, locati
 | Predictions integrated into DW/BI | PDF section 13, page 6; IDs 31–33 | Probability, class, model version, and target windows that can be reconciled |
 | Final handover | PDF section 15, page 7; IDs 37–40 | Data, ETL, DW, dashboards, model, evaluation report, slides, and demo |
 
-Preserve research location codes `HAN`, `PTO`, `TNG`, `TUQ`, `LCA`, `HBI`, `HPH`, and `NBI`. Research locations are stable coordinate points. Province names and boundaries may change and require versioned mapping. Boundaries effective after 2025-07-01 are a workbook requirement in IDs 4/11; verify the actual source, license, effective date, and geometry when acquiring the data. A filename or synthetic Point fixture is not evidence of correct boundaries.
+Preserve research location codes `HAN`, `PTO`, `TNG`, `TUQ`, `LCA`, `HBI`, `HPH`, and `NBI`. Research locations are stable coordinate points. Province names and boundaries may change and require versioned mapping. The workbook (IDs 4/11, risk sheet row 9) asks for boundaries effective after 2025-07-01 and old + new names; on 2026-10-21 the N1/N2 member decided to use pre-merger (63-province) boundaries instead, pending team confirmation (see §6 and [task specs §7](task-specs-weeks-2-5.md#7-id-4--real-boundary-geojson-n2-week-1-backlog)). Verify the actual source, license, effective date, and geometry when acquiring the data. A filename or synthetic Point fixture is not evidence of correct boundaries.
 
 Keep MinIO, Airflow, Python, PostgreSQL, scikit-learn, and Power BI. PDF section 14 does not target Hadoop/Spark/Kubernetes unless scale requires them.
 
@@ -91,7 +91,20 @@ Passing a small-window test establishes technical acceptance only for that windo
 | Prediction key/window and model/label metadata | 31–33 | Warehouse schema and rain label | Prediction loader and forecast page |
 | Recall/false-alarm targets, latency, and performance | 26, 28–29, 36 | Warehouse schema or rain label as applicable | Benchmarks and quantitative acceptance |
 
-AI may propose options and implement independent authorized work, but must not promote an open decision to an approved requirement. The 0.1 or 1 mm threshold, station-first fallback, and minimum coverage remain unresolved. Pause only the dependent work and continue independent work within the assigned scope.
+AI may propose options and implement independent authorized work, but must not promote an open decision to an approved requirement. Pause only the dependent work and continue independent work within the assigned scope.
+
+Status on 2026-10-22: the label threshold (1 mm over `(t, t+24h]`), the Open-Meteo label source for the first experiment, the missing-hour rule, and the UTC+7 calendar basis were decided on 2026-10-21 by the N1/N2 member with the team's confirmation relayed verbally (see [rain-label.md](rain-label.md) and [data-contract.md](data-contract.md)). Station-first/ERA5 fallback for labels, minimum coverage, the Recall target, and N3's review of the ML decisions remain open (§5a).
+
+## 5a. Proposals awaiting team decision (2026-10-22)
+
+These are proposals from the 2026-10-22 audit. None is approved; the owners named in the workbook decide.
+
+| Item | Current state | Proposal | Needs |
+| --- | --- | --- | --- |
+| Recall emphasis (PDF §12) | CART v1 selects configurations by validation F1 at 0.5 and the probability threshold by maximum validation F1 (0.40; validation recall 0.822, precision 0.752 on labels v0.2). A threshold of 0.34 would give recall 0.901, precision 0.693, and F1 0.784 versus 0.786. Recall emphasis is therefore only implicit (threshold below 0.5) | Predeclare a Recall rule for ID 36 and any later model, chosen on validation only: the highest-precision threshold with validation recall ≥ 0.85 (alternative: maximum F2). Report the F1-max threshold next to it. A test 2025 score for a rule chosen after test was seen is post-hoc and must be labelled so | N3 and the team: choose the rule and the recall target |
+| Boundaries (IDs 4/11) | Pre-merger 63 provinces decided by the N1/N2 member; workbook and risk sheet still ask for post-merger boundaries and old + new names | Confirm pre-merger in the workbook notes, or reopen IDs 4/11 for old + new mapping | Team confirmation |
+| ERA5/NetCDF and GeoJSON (IDs 4, 5, 14, 15) | Not started; IDs 4 and 5 were week-1 tasks. Without them the multi-format objective (PDF §5: JSON + NetCDF + CSV/Text + GeoJSON) is not met | Order: ID 4 GeoJSON first (small; candidate sources in task specs §7), then the ID 5 CDS request (N3; ERA5 hourly single levels for the northern box, 2016–2025, NetCDF), then IDs 14/15 ingestion and Silver. Downloads start only after the owner approves the scope; record license, product, and accumulation metadata | Owners N2 (ID 4) and N3 (IDs 5, 14, 15): dates and go-ahead |
+| N3 review of ML decisions | Labels (1 mm, Open-Meteo), features v1/v2, the selection and threshold rules, the corrected-label re-score, and the CART v1 interpretation were done by the N1/N2 member for N3 (recorded "Do N1/N2 làm thay N3") | N3 reviews [rain-label.md](rain-label.md) and the ID 21–31 evidence in [progress.md](progress.md) before ID 36 and model v2 | N3 |
 
 ## 6. Discrepancies to preserve explicitly
 
@@ -103,6 +116,11 @@ AI may propose options and implement independent authorized work, but must not p
 | ID 16 merges/pivots sources for ML; PDF requires source-specific observations | Separate Gold observations and Gold ML; pivots must not erase DW source identity or sum rainfall across sources |
 | Ingestion modifies payloads, skips by size, and can mask failures | These are implementation limitations, not target contracts; address them within IDs 8/17/24 |
 | Base and local tests pass; workbook tasks still say Chưa bắt đầu | Workbook management status has not been updated automatically. Do not mark all 40 tasks or all of week 1 complete |
+| Workbook IDs 4/11 and risk row 9 ask for post-merger boundaries and old + new names; the N1/N2 member chose pre-merger boundaries on 2026-10-21 | `dim_location.province` keeps pre-merger names; no mapping table. Pending team confirmation (§5a) |
+| PDF §12 asks to emphasize Recall; CART v1 maximizes F1 | Disclosed in [rain-label.md](rain-label.md); a predeclared Recall rule is proposed for ID 36 (§5a) |
+| PDF §5 lists NetCDF and GeoJSON; neither exists yet | Open-Meteo JSON, Meteostat CSV, and GHCNh PSV are implemented; ERA5 and boundaries are planned (§5a) |
+| Meteostat 48820 "Ha Noi" is mapped to HAN, but its hourly values come from Nội Bài airport (ISD 488200, METAR VVNB), about 22 km from the HAN point | Recorded as `nearest_available` with the airport coordinates since 2026-10-22; station-versus-grid comparisons for HAN compare the airport with the HAN grid point |
+| ID 11 asks for GeoPandas distance assignment | Distances are computed once (haversine) and stored in `scripts/station_config.py`; values were recomputed in the 2026-10-22 audit (HAN 22.0 km for Meteostat, 11.3 km for GHCNh Hà Đông) |
 
 ## 7. Handover criteria
 

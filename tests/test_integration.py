@@ -33,26 +33,64 @@ def test_minio_health_task(minio_client):
 
 
 def test_schema_and_seed_rerun(pg_connection):
-    schema = Path(__file__).resolve().parents[1] / "sql/init_dwh_schema.sql"
+    """Rerun the real initializer order (base schema + every numbered migration)."""
+    sql_dir = Path(__file__).resolve().parents[1] / "sql"
+    files = [sql_dir / "init_dwh_schema.sql", *sorted(sql_dir.glob("[0-9][0-9]_*.sql"))]
+    assert [f.name for f in files[1:]] == [
+        "02_olap_views.sql",
+        "03_station_daily_rain.sql",
+        "04_predictions.sql",
+        "05_metadata_corrections.sql",
+    ]
     with pg_connection, pg_connection.cursor() as cursor:
-        cursor.execute(schema.read_text())
+        for f in files:
+            cursor.execute(f.read_text())
         cursor.execute("SELECT count(*) FROM dim_location")
         assert cursor.fetchone()[0] == 8
         cursor.execute("SELECT count(*) FROM dim_time")
         assert cursor.fetchone()[0] == 24
-        cursor.execute("SELECT count(*) FROM dim_source")
-        assert cursor.fetchone()[0] == 4
+        cursor.execute("SELECT source_name FROM dim_source ORDER BY source_key")
+        assert [r[0] for r in cursor.fetchall()] == [
+            "Open-Meteo",
+            "ERA5",
+            "Meteostat",
+            "NOAA",
+            "GHCNh",
+        ]
         cursor.execute(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema='public'"
+            "SELECT table_name, table_type FROM information_schema.tables "
+            "WHERE table_schema='public'"
         )
-        assert {row[0] for row in cursor.fetchall()} == {
+        objects = dict(cursor.fetchall())
+        assert {t for t, kind in objects.items() if kind == "BASE TABLE"} == {
             "dim_date",
             "dim_time",
             "dim_location",
             "dim_source",
             "dim_station",
+            "dim_model",
             "fact_weather_observation",
             "fact_weather_prediction",
+            "fact_station_daily_rain",
+        }
+        assert {t for t, kind in objects.items() if kind == "VIEW"} >= {
+            "vw_obs_hourly",
+            "vw_obs_daily",
+            "vw_coverage",
+            "vw_prediction_vs_actual",
+        }
+        cursor.execute(
+            "SELECT table_name, column_name FROM information_schema.columns "
+            "WHERE column_name IN ('pressure_type', 'station_role', 'distance_km', "
+            "'evaluation_label_version', 'validation_f1_evaluation_labels') "
+            "AND table_name IN ('fact_weather_observation', 'dim_station', 'dim_model')"
+        )
+        assert set(cursor.fetchall()) == {
+            ("fact_weather_observation", "pressure_type"),
+            ("dim_station", "station_role"),
+            ("dim_station", "distance_km"),
+            ("dim_model", "evaluation_label_version"),
+            ("dim_model", "validation_f1_evaluation_labels"),
         }
 
 

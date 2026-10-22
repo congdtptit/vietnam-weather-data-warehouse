@@ -49,6 +49,12 @@ def _client(missing=()):
 
     client.get_object.side_effect = get
     client.put_object.side_effect = put
+
+    def stat(bucket, key):
+        if key not in store:
+            raise S3Error("NoSuchKey", "missing", "/r", "req", "host", None)
+
+    client.stat_object.side_effect = stat
     return client, store
 
 
@@ -91,3 +97,16 @@ def test_export_refuses_incomplete_silver_snapshot():
     with pytest.raises(RuntimeError, match="1 Silver Open-Meteo objects missing"):
         erl.export_labels(2024, 2024, client=client)
     assert store == {}  # nothing published
+
+
+def test_export_refuses_to_overwrite_an_existing_version():
+    import export_rain_labels as erl
+
+    client, store = _client()
+    erl.export_labels(2024, 2024, client=client)
+    parquet_key, _ = erl.labels_keys()
+    saved = store[parquet_key]
+    with pytest.raises(RuntimeError, match="already exist"):
+        erl.export_labels(2024, 2024, client=client)
+    assert store[parquet_key] == saved
+    erl.export_labels(2024, 2024, client=client, overwrite=True)
