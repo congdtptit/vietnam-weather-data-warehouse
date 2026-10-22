@@ -195,3 +195,13 @@ def test_comparison_reports_missing_source_instead_of_agreement():
     client, _ = _client()
     row = cmp.compare_location_year(client, "HAN", 2024)
     assert row["pairs"] == 0 and "no Silver data" in row["note"]
+
+
+def test_rerun_over_current_objects_needs_no_credentials(monkeypatch):
+    client, _ = _client()
+    ts.ingest_era5_timeseries(2024, 2024, location="HAN", cds_client=FakeCds(), client=client)
+    monkeypatch.setattr(ts, "make_cds_client", Mock(side_effect=RuntimeError("no CDS credentials")))
+    assert ts.ingest_era5_timeseries(2024, 2024, location="HAN", client=client) == {
+        "stored": 0,
+        "skipped": 1,
+    }

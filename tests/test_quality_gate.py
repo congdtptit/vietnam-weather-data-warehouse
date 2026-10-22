@@ -14,6 +14,7 @@ from minio.error import S3Error
 OM_KEY = "weather_hourly/year=2024/month={m:02d}/weather_hourly_HAN_2024{m:02d}.parquet"
 MS_KEY = "weather_hourly/year=2024/month={m:02d}/weather_hourly_meteostat_48820_2024{m:02d}.parquet"
 RAIN_KEY = "ghcnh/station_daily_rain/year=2024/ghcnh_daily_rain_48825_2024.parquet"
+ERA5_KEY = "era5/weather_hourly/year=2024/month={m:02d}/era5_hourly_HAN_2024{m:02d}.parquet"
 
 
 def _parquet(df):
@@ -31,7 +32,7 @@ def _hourly(source, month, hours=None):
             "source_name": source,
             "location_code": "HAN",
             "timestamp_utc": ts,
-            "pressure_type": "surface" if source == "Open-Meteo" else "sea_level",
+            "pressure_type": "sea_level" if source == "Meteostat" else "surface",
         }
     )
     for col in qg.MEASUREMENTS:
@@ -57,9 +58,10 @@ def _rain(days=366):
 
 
 def _silver(**changes):
-    """A complete HAN 2024 Silver: 12 Open-Meteo and Meteostat months, 366 rain days."""
+    """A complete HAN 2024 Silver: 12 Open-Meteo, Meteostat, ERA5 months, 366 rain days."""
     frames = {OM_KEY.format(m=m): _hourly("Open-Meteo", m) for m in range(1, 13)}
     frames.update({MS_KEY.format(m=m): _hourly("Meteostat", m) for m in range(1, 13)})
+    frames.update({ERA5_KEY.format(m=m): _hourly("ERA5", m) for m in range(1, 13)})
     frames[RAIN_KEY] = _rain()
     frames.update(changes)
     return {k: _parquet(v) for k, v in frames.items() if v is not None}
@@ -118,7 +120,9 @@ def test_complete_silver_passes_without_warnings_and_writes_a_report():
     assert om["status"] == "PASS" and om["severity"] == "ERROR"
     (ms,) = _checks(report, "H07_hourly_coverage", "Meteostat")
     assert ms["status"] == "PASS" and ms["severity"] == "WARN" and ms["threshold"] == 95.0
-    assert _checks(report, "H00_objects_read")[0]["rows_in_scope"] == 2 * 8784
+    assert _checks(report, "H00_objects_read")[0]["rows_in_scope"] == 3 * 8784
+    (era5,) = _checks(report, "H07_hourly_coverage", "ERA5")
+    assert era5["status"] == "PASS" and era5["severity"] == "ERROR"
     (rain,) = _checks(report, "D06_day_coverage")
     assert rain["status"] == "PASS" and rain["rows"] == 366 == rain["days_in_year"]
 
@@ -261,3 +265,14 @@ def test_cli_exits_1_when_a_check_fails(monkeypatch):
         ["quality_gate.py", "--start-year", "2024", "--end-year", "2024", "--location", "HAN"],
     )
     assert qg.main() == 1
+
+
+def test_missing_era5_month_blocks_the_load_and_era5_pressure_has_its_own_limit():
+    (fail,) = _failed(_silver(**{ERA5_KEY.format(m=5): None}), "H07_hourly_coverage")
+    assert fail["source"] == "ERA5" and fail["missing_hours"] == 31 * 24
+    jan = _hourly("ERA5", 1)
+    jan.loc[3, "pressure_hpa"] = 920.0  # grid-cell terrain: plausible for ERA5, not elsewhere
+    report = _run(_silver(**{ERA5_KEY.format(m=1): jan}))
+    (era5,) = _checks(report, "H09_plausible_values", "ERA5")
+    assert report["warnings"] == 0 and era5["status"] == "PASS"
+    assert era5["limits"]["pressure_hpa"] == [900.0, 1050.0]

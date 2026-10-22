@@ -226,9 +226,22 @@ def test_retraction_scope_comes_from_the_request_not_the_incoming_rows():
     loc_map = {code: i for i, code in enumerate(sorted(CANONICAL_LOCATIONS), start=1)}
     source_map = {"Open-Meteo": 1, "ERA5": 2, "Meteostat": 3, "NOAA": 4, "GHCNh": 5}
     sources, locations = retraction_scope(loc_map, source_map)
-    assert sources == [1, 3]  # Meteostat stays in scope even in a month without its rows
+    assert sources == [1, 2, 3]  # Meteostat stays in scope even in a month without its rows
     assert locations == list(range(1, 9))
     assert retraction_scope(loc_map, source_map, "han")[1] == [loc_map["HAN"]]
+
+
+def test_missing_era5_location_object_is_reported_and_keys_match_the_transform():
+    import transform_era5_to_silver as era5
+    from load_gold_observations import era5_silver_key, missing_era5_objects
+
+    assert era5_silver_key("HAN", 2024, 6) == era5.silver_key("HAN", 2024, 6)
+    present = [era5_silver_key(c, 2024, 6) for c in sorted(CANONICAL_LOCATIONS) if c != "LCA"]
+    client = Mock()
+    client.list_objects.return_value = _listing(*present)
+    assert missing_era5_objects(client, 2024, 6, sorted(CANONICAL_LOCATIONS)) == [
+        era5_silver_key("LCA", 2024, 6)
+    ]
 
 
 def test_missing_open_meteo_location_object_is_reported():

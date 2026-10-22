@@ -17,8 +17,8 @@ Conversions, per ERA5 single-level conventions (checked against the stored files
 - tcc (0-1) -> cloud_cover_percent.
 The value of the nearest grid cell is kept as `grid_latitude`, `grid_longitude`.
 
-Silver keys (bucket silver), separate from `weather_hourly/` so the Gold loader does not load
-ERA5 into the DW (that is an open decision):
+Silver keys (bucket silver), outside `weather_hourly/` (Open-Meteo and Meteostat); the Gold loader
+reads both prefixes and loads ERA5 into the DW since 2026-10-23:
   era5/weather_hourly/year=YYYY/month=MM/era5_hourly_<LOCATION>_<YYYYMM>.parquet
   quality_reports/dq_report_era5_<timestamp>.json
 """

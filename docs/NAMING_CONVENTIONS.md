@@ -134,7 +134,7 @@ The pattern above is the Open-Meteo Silver key (one file per location-month, `so
 | --- | --- |
 | Meteostat (hourly) | `weather_hourly/year=YYYY/month=MM/weather_hourly_meteostat_<station_id>_<YYYYMM>.parquet` (same prefix as Open-Meteo; the Gold loader reads both) |
 | Province boundaries | `spatial/boundaries/northern_provinces_pre2025_<version>.geojson` (25 northern provinces, version `v1`) and the check report `spatial/boundaries/northern_provinces_pre2025_<version>.json` |
-| ERA5 (hourly, nearest grid cell) | `era5/weather_hourly/year=YYYY/month=MM/era5_hourly_<LOCATION>_<YYYYMM>.parquet` (not under `weather_hourly/`, so the Gold loader does not read it); comparison reports `quality_reports/compare_era5_open_meteo_<start>_<end>_<YYYYMMDDTHHMMSSZ>.json` |
+| ERA5 (hourly, nearest grid cell) | `era5/weather_hourly/year=YYYY/month=MM/era5_hourly_<LOCATION>_<YYYYMM>.parquet` (outside `weather_hourly/`; the Gold loader, quality gate, and reconciliation read both prefixes since 2026-10-23); comparison reports `quality_reports/compare_era5_open_meteo_<start>_<end>_<YYYYMMDDTHHMMSSZ>.json` |
 | GHCNh (daily rain) | `ghcnh/station_daily_rain/year=YYYY/ghcnh_daily_rain_<wmo>_<YYYY>.parquet`; rejected rows `ghcnh/quarantine/year=YYYY/ghcnh_daily_rain_<wmo>_<YYYY>_quarantine.parquet` |
 
 The key `weather_hourly/source=<source>/...` proposed earlier was not adopted.

@@ -31,7 +31,7 @@ import sys
 import tempfile
 import zipfile
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from ingest_era5 import VARIABLES, is_current, make_cds_client, request_id_of
 from ingest_ghcnh import BUCKET_BRONZE, get_minio_client
@@ -150,9 +150,12 @@ def inspect_download(path: str, request: dict[str, Any], hours: int) -> dict[str
 
 
 def ingest_location(
-    location: str, start_year: int, end_year: int, cds_client: Any, client: Minio
+    location: str, start_year: int, end_year: int, get_cds: Callable[[], Any], client: Minio
 ) -> str:
-    """Request, check, and store one location; return "stored" or "skipped", raise on failure."""
+    """Request, check, and store one location; return "stored" or "skipped", raise on failure.
+
+    The CDS client is created only when a request is needed, so a rerun over current objects
+    needs no credentials."""
     tag = f"  ERA5 time series {location} {start_year}-{end_year}"
     _, manifest_key = bronze_keys(location, start_year, end_year)
     if is_current(client, manifest_key):
@@ -161,7 +164,7 @@ def ingest_location(
     request = build_request(location, start_year, end_year)
     with tempfile.TemporaryDirectory() as tmp:
         target = os.path.join(tmp, "download")
-        result = cds_client.retrieve(DATASET, request)  # waits for the job
+        result = get_cds().retrieve(DATASET, request)  # waits for the job
         result.download(target)
         retrieved_at = datetime.now(timezone.utc).isoformat()
         summary = inspect_download(target, request, expected_hours(start_year, end_year))
@@ -222,12 +225,18 @@ def ingest_era5_timeseries(
             )
         return {"requests": len(locations), "dry_run": True}
     client = client or get_minio_client()
-    cds_client = cds_client or make_cds_client()
+    holder = {"cds": cds_client}
+
+    def get_cds() -> Any:
+        if holder["cds"] is None:
+            holder["cds"] = make_cds_client()
+        return holder["cds"]
+
     counts = {"stored": 0, "skipped": 0}
     failures: list[str] = []
     for loc in locations:
         try:
-            counts[ingest_location(loc, start_year, end_year, cds_client, client)] += 1
+            counts[ingest_location(loc, start_year, end_year, get_cds, client)] += 1
         except Exception as ex:
             print(f"  ERA5 time series {loc}: FAILED: {ex}", flush=True)
             failures.append(f"{loc}: {ex}")

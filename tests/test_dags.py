@@ -45,7 +45,15 @@ def test_pipeline_dag_order_and_settings(dag_bag):
     dag = dag_bag.dags["weather_bronze_to_dw_dag"]
     assert dag.catchup is False and dag.schedule_interval is None and dag.max_active_runs == 1
     down = {t.task_id: t.downstream_task_ids for t in dag.tasks}
-    assert down["validate_window"] == {"ingest_open_meteo", "ingest_meteostat", "ingest_ghcnh"}
+    assert down["validate_window"] == {
+        "ingest_open_meteo",
+        "ingest_meteostat",
+        "ingest_era5_timeseries",
+        "ingest_ghcnh",
+    }
+    assert down["ingest_era5_timeseries"] == {"transform_era5_to_silver"}
+    assert down["transform_era5_to_silver"] == {"quality_gate"}
+    assert dag.get_task("ingest_era5_timeseries").retries == 1
     assert down["ingest_ghcnh"] == {"transform_ghcnh_to_silver"}
     assert down["transform_ghcnh_to_silver"] == {"quality_gate"}
     assert down["quality_gate"] == {"seed_dimensions"}
@@ -73,6 +81,8 @@ def test_pipeline_commands_render_the_window(dag_bag, params, expected):
     for task_id in (
         "ingest_open_meteo",
         "ingest_ghcnh",
+        "ingest_era5_timeseries",
+        "transform_era5_to_silver",
         "quality_gate",
         "load_gold_observations",
         "load_station_daily_rain",

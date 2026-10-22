@@ -146,9 +146,18 @@ class SilverReadError(RuntimeError):
         self.original_error = original_error
 
 
-# Sources this loader reads from Silver weather_hourly/. A month's DW retraction covers all of
-# them, so a source that disappears from Silver is removed from the DW instead of lingering.
-LOADED_SOURCES = ("Open-Meteo", "Meteostat")
+# Sources this loader reads from Silver: Open-Meteo and Meteostat under weather_hourly/, ERA5
+# (added 2026-10-23) under era5/weather_hourly/. A month's DW retraction covers all of them, so
+# a source that disappears from Silver is removed from the DW instead of lingering.
+LOADED_SOURCES = ("Open-Meteo", "Meteostat", "ERA5")
+SILVER_HOURLY_PREFIXES = ("weather_hourly", "era5/weather_hourly")
+
+
+def era5_silver_key(location_code: str, year: int, month: int) -> str:
+    return (
+        f"era5/weather_hourly/year={year}/month={month:02d}/"
+        f"era5_hourly_{location_code}_{year}{month:02d}.parquet"
+    )
 
 
 def open_meteo_silver_key(location_code: str, year: int, month: int) -> str:
@@ -178,6 +187,15 @@ def missing_open_meteo_objects(
     prefix = f"weather_hourly/year={year}/month={month:02d}/"
     present = {o.object_name for o in minio_client.list_objects(BUCKET_SILVER, prefix=prefix)}
     return [k for loc in locations if (k := open_meteo_silver_key(loc, year, month)) not in present]
+
+
+def missing_era5_objects(
+    minio_client: Minio, year: int, month: int, locations: list[str]
+) -> list[str]:
+    """ERA5 is complete for every location-month, as Open-Meteo is; list the absent objects."""
+    prefix = f"era5/weather_hourly/year={year}/month={month:02d}/"
+    present = {o.object_name for o in minio_client.list_objects(BUCKET_SILVER, prefix=prefix)}
+    return [k for loc in locations if (k := era5_silver_key(loc, year, month)) not in present]
 
 
 def retraction_scope(
@@ -233,9 +251,13 @@ def process_month_observations(
 ) -> pd.DataFrame:
     """Read, combine, and resolve keys for all Silver Parquet files in a given year/month."""
     m_str = f"{month:02d}"
-    prefix = f"weather_hourly/year={year}/month={m_str}/"
-
-    objects = list(minio_client.list_objects(BUCKET_SILVER, prefix=prefix, recursive=True))
+    objects = [
+        obj
+        for base in SILVER_HOURLY_PREFIXES
+        for obj in minio_client.list_objects(
+            BUCKET_SILVER, prefix=f"{base}/year={year}/month={m_str}/", recursive=True
+        )
+    ]
     if not objects:
         return pd.DataFrame()
 
@@ -741,12 +763,14 @@ def run_gold_pipeline(
                 ym_str = f"{year}{m_str}"
                 stats["total_months_processed"] += 1
 
+                locs = requested_locations(target_location)
                 missing = missing_open_meteo_objects(
-                    minio_client, year, month, requested_locations(target_location)
-                )
+                    minio_client, year, month, locs
+                ) + missing_era5_objects(minio_client, year, month, locs)
                 if missing:
                     print(
-                        f"  [!] Month {ym_str}: {len(missing)} Silver Open-Meteo object(s) missing"
+                        f"  [!] Month {ym_str}: {len(missing)} Silver Open-Meteo/ERA5 object(s) "
+                        "missing"
                     )
                     stats["failures"].append(
                         {"month": ym_str, "stage": "silver_missing", "failed_keys": missing}
