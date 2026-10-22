@@ -22,4 +22,6 @@ psycopg2-binary==2.9.9
 SQLAlchemy==1.4.52
 scikit-learn==1.5.1
 requests==2.31.0
+# ERA5 requests to the Copernicus Climate Data Store (ID 5); 0.7.7 is required by the current CDS API.
+cdsapi==0.7.7
 python-dotenv==1.0.1

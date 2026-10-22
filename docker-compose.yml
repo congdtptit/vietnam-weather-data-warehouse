@@ -26,6 +26,9 @@ x-airflow-common: &airflow-common
     POSTGRES_USER: ${POSTGRES_USER:-postgres}
     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     DWH_DB: ${DWH_DB:-weather_dwh}
+    # Copernicus CDS credentials for scripts/ingest_era5.py; set them in .env, never in Git
+    CDSAPI_URL: ${CDSAPI_URL:-}
+    CDSAPI_KEY: ${CDSAPI_KEY:-}
   volumes:
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs

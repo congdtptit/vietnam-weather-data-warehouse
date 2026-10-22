@@ -11,6 +11,7 @@ Quality reports:
 """
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -329,6 +330,8 @@ def process_open_meteo_to_silver(
         "total_conflicting_duplicates_quarantined": 0,
         "total_missing_hours": 0,
         "details_by_location_year": {},
+        "bronze_verified_by_manifest": 0,
+        "bronze_without_manifest": 0,
         "failures": [],
     }
 
@@ -389,6 +392,43 @@ def process_open_meteo_to_silver(
                     }
                 )
                 continue
+
+            # 1b. Verify the stored bytes against the Bronze manifest (objects written since
+            # 2026-10-22); legacy objects without a manifest are counted, not rejected.
+            manifest_key = bronze_key.replace("open_meteo/hourly/", "open_meteo/manifests/", 1)
+            try:
+                man = client.get_object(BUCKET_BRONZE, manifest_key)
+                try:
+                    manifest = json.loads(man.read())
+                finally:
+                    man.close()
+                    man.release_conn()
+            except S3Error as s3_err:
+                if not is_s3_not_found_error(s3_err):
+                    overall_dq["failures"].append(
+                        {
+                            "location_code": loc,
+                            "year": year,
+                            "stage": "read_manifest",
+                            "error": str(s3_err),
+                        }
+                    )
+                    continue
+                manifest = None
+            if manifest is None:
+                overall_dq["bronze_without_manifest"] += 1
+            elif hashlib.sha256(raw_bytes).hexdigest() != manifest.get("sha256"):
+                overall_dq["failures"].append(
+                    {
+                        "location_code": loc,
+                        "year": year,
+                        "stage": "manifest_checksum",
+                        "error": f"{bronze_key} does not match its manifest SHA-256",
+                    }
+                )
+                continue
+            else:
+                overall_dq["bronze_verified_by_manifest"] += 1
 
             # 2. Clean & standardize
             try:

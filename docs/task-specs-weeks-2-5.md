@@ -179,6 +179,8 @@ ingest_meteostat  ─┼─> transform_open_meteo_to_silver ─┐
 
 **Acceptance criteria.** For a sample year the SHA-256 of the stored object equals the SHA-256 of a fresh download; the Silver output for that year is byte-for-byte or row-for-row identical before and after the change; existing tests and a rerun pass.
 
+**Implemented 2026-10-22 (Open-Meteo).** The first criterion cannot hold literally: every Open-Meteo response contains `generationtime_ms`, which changes per request, so two downloads never have the same bytes. Implemented instead: the stored bytes match the SHA-256 recorded at download, and a replacement is accepted only if its hourly values and units equal the previous object. All 80 objects (8 points × 2016–2025) were replaced on that basis, and Silver 2024 was row-for-row identical (70,272 rows) before and after. See [progress](progress.md).
+
 ## 7. ID 4 — Real boundary GeoJSON (N2, week 1 backlog)
 
 **Business purpose.** Province maps in Power BI (ID 27) and a correct province name for each research point (ID 11).
@@ -223,7 +225,7 @@ None of these licenses, versions, or geometries were verified in this review.
 1. Create a CDS account and accept the dataset licence and the general Copernicus licence; unaccepted licences cause HTTP 403.
 2. Store the API key in `~/.cdsapirc` or an environment variable outside Git.
 3. Choose the product: `reanalysis-era5-single-levels` (hourly) or ERA5-Land (hourly, finer grid). The choice affects accumulation handling in ID 15.
-4. Request northern Vietnam only (for example north 23.5, west 102, south 20, east 107.5), only the variables needed (2 m temperature, 2 m dewpoint, total precipitation, surface pressure, 10 m u/v wind), 2016–2025, **one month per request**. ECMWF reports per-request item limits (60,000 items for hourly ERA5 and 6,000 for ERA5-Land in 2024; limits change), and NetCDF output allows less data than GRIB.
+4. Request northern Vietnam only (implemented area north 23.5, west 102, south 19.5, east 107.5; total cloud cover was added to the variables below on 2026-10-22), only the variables needed (2 m temperature, 2 m dewpoint, total precipitation, surface pressure, 10 m u/v wind), 2016–2025, **one month per request**. ECMWF reports per-request item limits (60,000 items for hourly ERA5 and 6,000 for ERA5-Land in 2024; limits change), and NetCDF output allows less data than GRIB.
 
 **Acceptance criteria.** Evidence that requests were submitted (request IDs, area, variables, product, window); credentials absent from the repository; no claim of a completed download without files in Bronze.
 
