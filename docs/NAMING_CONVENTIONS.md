@@ -90,7 +90,7 @@ Path `bronze/open_meteo/...` consists of bucket `bronze` and object key `open_me
 - Do not modify content, remove fields, or change formats.
 - Preserve reproducibility when rerunning the pipeline.
 
-This is the raw-preservation target. Current Open-Meteo ingestion adds `_pipeline_metadata` and reserializes JSON, so it does not meet that target. Separate metadata when fixing ingestion; see [progress](progress.md).
+This is the raw-preservation target. Open-Meteo, GHCNh, ERA5, and boundary ingestion meet it, with separate manifests (Open-Meteo since 2026-10-22; before that it added `_pipeline_metadata` and reserialized the JSON). Meteostat ingestion stores the decompressed CSV without a manifest and does not meet it yet; see [progress](progress.md).
 
 ### 3.2. General Path Structure
 ```
@@ -146,6 +146,7 @@ The key `weather_hourly/source=<source>/...` proposed earlier was not adopted.
     `silver/stations/stations_metadata_cleaned.parquet`
   * Data quality reports:
     `silver/quality_reports/dq_report_20240501.json`
+  * DW reconciliation reports (ID 17): `gold/quality_reports/reconcile_<start>_<end>[_<LOCATION>]_<YYYYMMDDTHHMMSSZ>.json`
 
 ---
 

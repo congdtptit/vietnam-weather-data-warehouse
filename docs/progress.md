@@ -976,3 +976,31 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
   - `make test` → 136 passed after these changes.
 - Workbook: IDs 1, 2, 3, 8 Đang làm 95 (criteria met, owner to confirm), ID 5 Đang làm 90, ID 14 Đang làm 60, with notes.
 - Next step: with the user's go-ahead, request the remaining months (`ingest_era5.py --start-year 2016 --end-year 2025`, resumable: stored months are skipped). Final status for IDs 1–5 stays with the owner.
+
+## Airflow DAG Bronze → DW (ID 17) — 2026-10-22
+
+- Related work: workbook ID 17 (N1, weeks 4–5); specification `docs/task-specs-weeks-2-5.md` §5; `dags/AGENTS.md`.
+- Changes:
+  - New `dags/dag_weather_pipeline.py` (`weather_bronze_to_dw_dag`): `validate_window` → (`ingest_open_meteo` → `transform_open_meteo_to_silver`, `ingest_meteostat` → `transform_meteostat_to_silver`) → `seed_dimensions` → `load_gold_observations` → `reconcile`. Each task is a `BashOperator` calling an existing script with `set -euo pipefail`, so a non-zero exit fails the task. Params `start_year`/`end_year` (2016–2025) and `location` (empty = all 8); manual trigger only, `catchup=False`, `max_active_runs=1`; ingestion tasks retry once after 2 minutes, all others do not retry. No network or data access at import; only parameters pass between tasks.
+  - New `scripts/reconcile_dw.py`: counts rows per source × location × UTC year in Silver `weather_hourly/` (Open-Meteo, Meteostat; canonical locations) and in `fact_weather_observation`; any difference or one-sided group fails (exit 1); report in `gold/quality_reports/reconcile_<start>_<end>[_<loc>]_<ts>.json`.
+  - Tests: `tests/test_dags.py` (task order and settings, rendered commands with and without location, window validation) and new `tests/test_reconcile_dw.py` (pass with report, mismatch and one-sided groups fail, compare). The higher warning count (17) comes from the existing DAGs' deprecated `schedule_interval`, reported once per test that loads the DagBag.
+  - Docs: task specs §5 (implemented, deviations), `docs/architecture.md`, `docs/NAMING_CONVENTIONS.md`, `README.md`.
+- Checks: `ruff` passed; `make test` → 145 passed, 18 deselected. In the running Airflow: no import errors; `airflow tasks list --tree` shows the expected order.
+- Data (real, local; triggered through the REST API):
+  - Before: DW 788,861 rows, rain 180,520.90 mm; HAN 2024 Open-Meteo 8,784 rows (2,660.30 mm, mean 24.6176 °C), Meteostat 8,767 (mean 25.1590 °C).
+  - Run 1 `manual__2026-10-22T13:19:12` (2024, HAN): success, all 8 tasks on the first try, each task 0.3–11.4 s. Ingestion skipped current objects (Open-Meteo by manifest; Meteostat 2 existing files), no API call. Reconcile: 2 groups, Silver 17,551 = DW 17,551. DW and HAN 2024 figures unchanged.
+  - Run 2 `manual__2026-10-22T13:20:38` (rerun, same window): success; DW 788,861 rows = 788,861 distinct (source, location, UTC hour), rain 180,520.90 mm: no new rows.
+  - Run 3 `manual__2026-10-22T13:21:45` (forced failure): MinIO stopped before the trigger. Both ingestion tasks failed after their retry ("Failed to resolve 'minio'", exit 1); the five downstream tasks were `upstream_failed`; the run failed at 13:24:21Z. MinIO restarted; `clearTaskInstances` (only failed, with downstream) resumed the same run: `validate_window` was not rerun, ingestion succeeded on try 3, the rest on try 1; run success; DW unchanged.
+  - Run 4 `manual__2026-10-22T13:26:31` (2024, all locations): success; reconcile 9 groups, Silver 79,039 = DW 79,039 (`gold/quality_reports/reconcile_2024_2024_20261022T132729Z.json`); DW unchanged.
+  - The ERA5 background download was paused during these runs (one in-flight 2016-01 request abandoned) and restarted afterwards; it resumes by skipping stored months.
+- Limits: the window is per year (a one-month run is not possible with the current scripts); GHCNh daily rain, boundaries, and ERA5 are not in the DAG; no schedule or watermark (ID 25); data-quality gates beyond row reconciliation are ID 24. Only 2024 was run through the DAG; the 2016–2025 history was loaded by the scripts earlier.
+- Next step: ID 24 (quality checks in the DAG) or ID 15 (ERA5 to Silver) once ERA5 is downloaded. Workbook ID 17: Đang làm 90.
+
+## Documentation sweep after the week-1 and ID 17 work — 2026-10-22
+
+- Related work: user request to bring every document up to date with the work done on 2026-10-22 and check for omissions.
+- Method: searched README, `docs/`, scoped `AGENTS.md` files, and skills for statements made stale by the audit fixes, IDs 1–5, 8, 14, and 17 (for example "reserializes", "no manifest", "size-based", "not started", "no Airflow DAG", test counts, status dates), and read the workbook notes of IDs 9, 10, 12, 13, 16, 18, 19.
+- Corrected: `docs/architecture.md` (status date; Compose, Open-Meteo, and Bronze/Silver/Gold rows), `docs/development.md` (fixed Open-Meteo limitations), `docs/NAMING_CONVENTIONS.md` (raw-preservation status per source), `docs/business-requirements.md` §5a (ERA5/GeoJSON row status), `docs/implementation-roadmap.md` (test counts, week-1 status), `docs/task-specs-weeks-2-5.md` (§5 decision on the test window and the GHCNh chain, §6 wording, §8 implementation), `dags/AGENTS.md` and `scripts/AGENTS.md` (ingester failure and raw-preservation status), `README.md` (Bronze/ERA5 bullet, test counts, DAG listing). Workbook notes of ID 10 (Silver manifest check) and ID 16 (Int64 `station_key` in all 120 Gold files).
+- Decision recorded (owner of ID 17, given with the go-ahead on 2026-10-22): the smallest DAG test window is one year × one location; the GHCNh chain joins the DAG; boundaries stay a one-off script; ERA5 joins after ID 15.
+- Checks: link and anchor check over README and `docs/` (0 problems); `git diff --check`.
+- Limits: `docs/progress.md` entries keep the figures as they were measured; earlier entries are corrected only by dated notes.

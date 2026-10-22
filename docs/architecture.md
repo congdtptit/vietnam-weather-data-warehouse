@@ -24,17 +24,17 @@ Observations retain separate sources. Gold for DW and Gold for ML have different
 
 ## Components and current implementation
 
-Status as of 2026-10-21; [progress](progress.md) holds the commands, row counts, and limits behind each row.
+Status as of 2026-10-22; [progress](progress.md) holds the commands, row counts, and limits behind each row.
 
 | Component | Target | Repository evidence |
 | --- | --- | --- |
-| Docker Compose | MinIO, PostgreSQL, Airflow | Runs locally; build and integration tests pass |
-| Open-Meteo | Hourly data, 2016–2025, eight points | Annual download script and manually triggered DAG; full 10-year Bronze → Silver → Gold → DW run on one local machine |
+| Docker Compose | MinIO, PostgreSQL, Airflow | Runs locally; build and integration tests pass; Airflow webserver, scheduler, and DAG runs verified end-to-end on 2026-10-22 (ID 1) |
+| Open-Meteo | Hourly data, 2016–2025, eight points | Annual download script (received bytes plus manifest), the Bronze-only DAG, and the full pipeline DAG (ID 17); full 10-year Bronze → Silver → Gold → DW run on one local machine |
 | Stations | Meteostat hourly and NOAA GHCNh daily rainfall | Verified station registry (`scripts/station_config.py`). Meteostat: script ETL into the observation fact, model-derived values removed; only Hà Nội is mapped and it reports no rainfall. GHCNh: five stations into `fact_station_daily_rain` |
 | ERA5 | Real NetCDF | `scripts/ingest_era5.py`: monthly CDS requests, checks, Bronze with manifest; 2024-01 loaded on 2026-10-22, other months not yet requested (ID 5) |
 | Boundaries | 63-province (pre-merger) GeoJSON | `scripts/ingest_boundaries.py`: geoBoundaries VNM ADM1 (commit `9469f09`) in Bronze with a manifest; 25 northern provinces in Silver; research points checked (ID 4) |
-| Bronze/Silver/Gold | Contracted data layers | Script-based ETL for all three layers; Bronze still reserializes Open-Meteo payloads and has no manifests (ID 8) |
-| DW | Dimensions, facts, loading, and OLAP | DDL, seeds, idempotent loaders, OLAP views (`sql/02_olap_views.sql`, `sql/03_station_daily_rain.sql`); no Airflow DAG for Bronze → DW (ID 17) |
+| Bronze/Silver/Gold | Contracted data layers | Script-based ETL for all three layers. Bronze keeps received bytes with manifests for Open-Meteo, GHCNh, ERA5, and boundaries; Meteostat Bronze is still the decompressed CSV without a manifest (ID 9). Silver verifies Open-Meteo manifest checksums |
+| DW | Dimensions, facts, loading, and OLAP | DDL, seeds, idempotent loaders, OLAP views (`sql/02_olap_views.sql`, `sql/03_station_daily_rain.sql`); DAG `weather_bronze_to_dw_dag` (ID 17) runs Open-Meteo and Meteostat Bronze → Silver → Gold → DW for an explicit window of years and reconciles DW with Silver (`scripts/reconcile_dw.py`); manual trigger, no incremental schedule (ID 25) |
 | ML | CART, predictions in DW | RainNext24h labels, feature datasets v1 (used by model v1) and v2 (corrected labels, current), and CART model v1 (tuned on validation 2024, evaluated once on test 2025) in Gold ML, plus EDA and tree/rules notebooks; test 2025 predictions loaded into `fact_weather_prediction` with `dim_model` (`sql/04_predictions.sql`); no scoring DAG (ID 32) |
 | BI | Power BI dashboards | Build guide `docs/powerbi-dashboard-v1.md`; no PBIX file |
 

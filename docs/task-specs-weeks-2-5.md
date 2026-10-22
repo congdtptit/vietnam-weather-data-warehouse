@@ -164,11 +164,15 @@ ingest_meteostat  ─┼─> transform_open_meteo_to_silver ─┐
 
 **Acceptance criteria.** A one-month run, a rerun without new rows, and a forced failure followed by a successful resume are demonstrated and logged; DAG import has no network calls; parsing alone is not accepted as evidence.
 
+**Decision (2026-10-22, owner of ID 17):** the smallest test window is **one UTC year × one location**, not one month, because Bronze objects, transforms, and the Gold loader work per year; a one-year, one-location run takes about one minute. The GHCNh daily-rain chain (`ingest_ghcnh` → `transform_ghcnh_to_silver` → `load_station_daily_rain`) is added to the DAG so that it rebuilds every DW fact it can; boundaries stay a one-off script (a static file) and ERA5 joins after its Silver step (ID 15) and a decision on whether ERA5 is loaded into the DW.
+
+**Implemented 2026-10-22.** `dags/dag_weather_pipeline.py` (`weather_bronze_to_dw_dag`) and `scripts/reconcile_dw.py`. Parameters `start_year`, `end_year` (2016–2025, checked by a first `validate_window` task) and optional `location`; `schedule=None`, `catchup=False`, `max_active_runs=1`; one retry after 2 minutes for the two ingestion tasks only; transforms run with `--overwrite`. Deviations from this section: the smallest window is one year (optionally one location), not one month, because the ingesters, transforms, and Gold loader work per year; the GHCNh daily-rain chain, the boundaries, and ERA5 are not part of this DAG. Evidence (runs, rerun, failure and resume): [progress](progress.md).
+
 **Known constraint.** The last full Gold load took 292 s (DQ report `dq_report_gold_load_20261021_020704.json`; an earlier version of this line said 3,493 s, which was not supported by any run artifact; corrected 2026-10-22). The DAG should run per year so that one slow or failed year can be retried alone.
 
 ## 6. ID 8 — Bronze keeps the original payload (N1)
 
-**Business purpose.** Bronze must be the evidence of what the source returned. Today the Open-Meteo ingester adds `_pipeline_metadata` and re-serializes the JSON, so the stored file is not the original response. Size-based skipping also cannot detect a wrong or truncated file.
+**Business purpose.** Bronze must be the evidence of what the source returned. Until 2026-10-22 the Open-Meteo ingester added `_pipeline_metadata` and re-serialized the JSON, so the stored file was not the original response, and size-based skipping could not detect a wrong or truncated file.
 
 **Required behaviour.**
 
@@ -228,6 +232,8 @@ None of these licenses, versions, or geometries were verified in this review.
 4. Request northern Vietnam only (implemented area north 23.5, west 102, south 19.5, east 107.5; total cloud cover was added to the variables below on 2026-10-22), only the variables needed (2 m temperature, 2 m dewpoint, total precipitation, surface pressure, 10 m u/v wind), 2016–2025, **one month per request**. ECMWF reports per-request item limits (60,000 items for hourly ERA5 and 6,000 for ERA5-Land in 2024; limits change), and NetCDF output allows less data than GRIB.
 
 **Acceptance criteria.** Evidence that requests were submitted (request IDs, area, variables, product, window); credentials absent from the repository; no claim of a completed download without files in Bronze.
+
+**Implemented 2026-10-22 (`scripts/ingest_era5.py`).** Product `reanalysis-era5-single-levels`, one request per month, NetCDF, credentials from `.env` (ignored by Git). The first real request (job `70c1b649-2d18-445e-b460-f3c9007f772c`) ran 6.5 minutes; the CDS returned a zip of two NetCDF files (instantaneous and accumulated variables), which is stored unchanged with a manifest listing both. 2024-01 is in Bronze; the 2016–2025 download was started the same day and resumes by skipping stored months. Details and counts: [progress](progress.md).
 
 ## 9. Sources consulted
 
