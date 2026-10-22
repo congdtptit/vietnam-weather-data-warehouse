@@ -920,3 +920,28 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
 - Evidence for (1): read-only validation scan of model v1 on corrected labels (`cart_rain_val_2024_v2`): 0.32 P 0.688 R 0.911 F1 0.784 F2 0.856; 0.34 P 0.701 R 0.899 F1 0.788; 0.36 P 0.710 R 0.880 F1 0.786 (FP 12,641, FN 4,217); 0.38 P 0.741 R 0.838; 0.40 P 0.760 R 0.819 F1 0.789 (FP 9,082, FN 6,338). Test 2025 was not read.
 - Changes: `docs/business-requirements.md` §5a, `docs/rain-label.md` (decisions table, "Review by N3" checklist), `docs/warehouse-schema.md`, `docs/task-specs-weeks-2-5.md`, `README.md`; workbook notes ID 4, 5, 11 and risk rows 9, 12.
 - Limits: no code or data changed; nothing at 0.36 is loaded into the DW yet (ID 36); the 0.85 target was set after viewing the validation scan.
+
+## Province boundary GeoJSON (ID 4; ID 11 point mapping) — 2026-10-22
+
+- Related work: workbook ID 4 (owner N2); decision 2026-10-21 to use pre-merger (63-province) boundaries, `docs/task-specs-weeks-2-5.md` §7; proposal PDF §5 (GeoJSON format). Silver subset agreed with the user on 2026-10-22: the 8 provinces with data plus the other northern provinces as a background.
+- Objective/scope: one pinned real boundary file in Bronze with a manifest, a cleaned northern subset in Silver, and the research-point check. No DW change.
+- Source review (2026-10-22, read-only web/API checks): HDX `cod-ab-vnm` (API `package_show`) lists only the 34-province files of 2025-09-25, so the 63-province version is not available there. geoBoundaries API `gbOpen/VNM/ADM1`: boundary year 2008, source "geoBoundaries, Wikipedia", license "Public Domain" (Wikimedia Commons), 64 units, build 2023-12-12, download pinned to commit `9469f09`. HDX dataset `geoboundaries-admin-boundaries-for-viet-nam` lists ODbL. GADM was not used (redistribution terms). The 25-province northern definition follows Decisions 368/QĐ-TTg (Red River Delta, 11 provinces) and 369/QĐ-TTg (Northern Midlands and Mountains, 14 provinces), both 2024-05-04; the 14-province list was read from the published decision, the 11-province list from a government page quoting the decision.
+- Changes:
+  - New `scripts/ingest_boundaries.py`: fetch with bounded retries; checks the current metadata still points to commit `9469f09`; validates before publishing (FeatureCollection, CRS84, 64 units, unique names, 63 provinces + Côn Đảo, valid geometries, 25 northern provinces present, each research point inside exactly its `dim_location.province`); Bronze bytes unchanged with a manifest; identical bytes are not rewritten, different bytes are refused without `--overwrite`; Silver GeoJSON of the 25 northern provinces (names NFC-normalized and trimmed, geometry unchanged, `has_observations` for the 8 with a research point) and a check report.
+  - New `tests/test_ingest_boundaries.py` (9 cases, synthetic squares): subset and unchanged geometry, 4 rejection cases (unit count, CRS, invalid geometry, missing northern province), research point in the wrong province, publish-once and refusal of changed bytes, a different upstream build publishes nothing, research provinces/points equal to the `dim_location` seed.
+  - Docs: `docs/data-contract.md` (new "Province boundaries" section), `docs/NAMING_CONVENTIONS.md` (Bronze and Silver keys), `docs/task-specs-weeks-2-5.md` §7 (implementation and source findings), `docs/architecture.md`, `docs/business-requirements.md`, `docs/warehouse-schema.md`, `README.md`. Workbook ID 4 and ID 11 notes.
+- Checks:
+  - `ruff check`/`format` passed; `make test` → 127 passed, 18 deselected; `make test-integration` → 18 passed.
+  - Probe before implementation: full file and simplified file downloaded to the session scratchpad; all 64 geometries valid (shapely 2.0.4; 52 Polygon, 12 MultiPolygon); one name with a trailing tab ("Hà Nội\t").
+- Data (real):
+  - `ingest_boundaries.py` rc 0, 11 s: Bronze `bronze/spatial/boundaries/vnm_adm1_pre2025_geoboundaries_9469f09.geojson` 723,311 bytes, SHA-256 `25dbc2fec9862016710118fc98042d3e803830c72361c91c4e864ae668fa9541`, equal to the independent probe download; manifest 1,805 bytes. Silver `silver/spatial/boundaries/northern_provinces_pre2025_v1.geojson` 316,286 bytes (25 provinces, 8 with observations) and its report.
+  - Research points: all 8 inside the expected province; distance to the province border 0.022° (LCA) to 0.163° (PTO); NBI 0.032°.
+  - Rerun: rc 0, 10 s, `bronze_written: false`.
+  - Silver province names equal the live `dim_location.province` values byte for byte (NFC).
+- Limits:
+  - The geometry is Wikipedia/Wikimedia-derived and coarse (mean 246 vertices per unit), not an official boundary; adequate for province maps, not for precise spatial analysis. Boundary changes after 2008 were not checked.
+  - License stated differently by geoBoundaries (public domain) and HDX (ODbL); attribution is required either way.
+  - Power BI Shape Map needs TopoJSON; conversion is part of task 27. Polygons are not loaded into the DW.
+  - Quảng Ninh is classified differently in some regional definitions; it only affects the background layer.
+- Workbook text (2026-10-22, at the user's request): ID 4 description (F8) now reads "ranh giới TRƯỚC sáp nhập (63 tỉnh)", ID 11 (F15) "chỉ tỉnh trước sáp nhập", risk row 9 handling (C9) the pre-merger rule; each keeps the original wording in quotes with the change date. Owners, weeks, and outputs unchanged.
+- Next step: ID 4 is technically delivered; acceptance and the workbook status stay with the owner.
