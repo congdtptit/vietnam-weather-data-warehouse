@@ -14,6 +14,7 @@ import io
 
 import numpy as np
 import pandas as pd
+from rain_labels import round_rain
 
 # Silver Open-Meteo variables explored at the forecast origin t
 ORIGIN_VARIABLES = [
@@ -54,7 +55,7 @@ def add_origin_variables(labels: pd.DataFrame, hourly: pd.DataFrame) -> pd.DataF
         g = g.reindex(grid)
         g["location_code"] = loc
         # Values stamped <= t only: trailing windows ending at t
-        g["rain_past_24h_mm"] = g["precipitation_mm"].rolling(24, min_periods=24).sum()
+        g["rain_past_24h_mm"] = round_rain(g["precipitation_mm"].rolling(24, min_periods=24).sum())
         g["pressure_change_24h_hpa"] = g["pressure_hpa"] - g["pressure_hpa"].shift(24)
         g["dew_point_depression_c"] = g["temperature_c"] - g["dew_point_c"]
         parts.append(g.rename_axis("origin_utc").reset_index())

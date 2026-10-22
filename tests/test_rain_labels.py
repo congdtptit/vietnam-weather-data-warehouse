@@ -132,3 +132,17 @@ def test_missing_label_reason_inside_split():
     row = _label_at(labels, pd.Timestamp("2024-06-01", tz="UTC"))
     assert row["split"] == "validation"
     assert row["exclusion_reason"] == "missing_label"
+
+
+def test_exact_threshold_total_is_rain_despite_float_error():
+    """Regression (v0.2.1). Real Hà Nội 2025 hours: the window holds 0.1+0.1+0.1+0.2+0.3+0.2
+    = 1.0 mm, and the trailing hours make the rolling float sum 0.99999999999999...,
+    which v0.2 labelled No. The label must treat the window as exactly 1.0 mm, i.e. Rain."""
+    rain = {4: 0.1, 5: 0.1, 21: 0.1, 22: 0.2, 23: 0.3, 24: 0.2, 25: 0.2, 26: 0.1, 27: 0.1}
+    row = _label_at(build_rain_labels(_series(28, rain)), T0)
+    assert row["valid_hours"] == 24
+    assert row["rain_next24h_mm"] == 1.0
+    assert bool(row["rain_next24h"]) is True
+    # Without the 0.1 mm at t+4 the window holds 0.9 mm: No
+    rain.pop(4)
+    assert bool(_label_at(build_rain_labels(_series(28, rain)), T0)["rain_next24h"]) is False
