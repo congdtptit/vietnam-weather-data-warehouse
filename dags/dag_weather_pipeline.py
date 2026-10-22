@@ -6,7 +6,8 @@ scheduling is ID 25. Hourly observations (Open-Meteo, Meteostat) go to
 fact_weather_observation; GHCNh daily station rain goes to fact_station_daily_rain.
 
 Each task runs an existing script; a non-zero exit fails the task. Ingestion skips objects
-whose manifest and checksum are current, transforms rewrite Silver for the window, the Gold
+whose manifest and checksum are current, transforms rewrite Silver for the window,
+`quality_gate` (ID 24) stops the run before the DW when Silver breaks a contract rule, the Gold
 loaders replace the window in the DW, and `reconcile` fails when DW row counts differ from
 Silver per source x location x year (hourly) or per station x year (daily rain). Only
 parameters and report keys pass between tasks.
@@ -84,6 +85,10 @@ with DAG(
         task_id="transform_ghcnh_to_silver",
         bash_command=script("transform_ghcnh_to_silver.py", YEARS + LOCATION + " --overwrite"),
     )
+    gate = BashOperator(
+        task_id="quality_gate",
+        bash_command=script("quality_gate.py", YEARS + LOCATION),
+    )
     seed = BashOperator(task_id="seed_dimensions", bash_command=script("seed_dimensions.py", ""))
     load = BashOperator(
         task_id="load_gold_observations",
@@ -102,4 +107,4 @@ with DAG(
     ingest_om >> silver_om
     ingest_ms >> silver_ms
     ingest_gh >> silver_gh
-    [silver_om, silver_ms, silver_gh] >> seed >> [load, load_rain] >> reconcile
+    [silver_om, silver_ms, silver_gh] >> gate >> seed >> [load, load_rain] >> reconcile

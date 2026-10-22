@@ -20,7 +20,11 @@ such as total precipitation) into separate files and returns them zipped, even w
 `download_format` is `unarchived`; the zip is stored as received and its members are listed
 in the manifest.
 
-One request per month (CDS limits the number of fields per request). A month is current
+One request per month (CDS limits the number of fields per request), sent one at a time:
+on 2026-10-22 the CDS rejected concurrent requests ("Maximum number queued requests for this
+dataset has been reached. Please configure your scripts to request data sequentially"). A job
+left queued by a stopped run blocks the next request until it finishes or is cancelled on the
+CDS (ecmwf.datastores Client.delete). A month is current
 when its manifest exists and the stored bytes match its SHA-256; it is then skipped. A file
 whose variables, hourly time steps, or area do not match the request is a failure and is
 not stored. Use --dry-run to print the requests without contacting CDS.
