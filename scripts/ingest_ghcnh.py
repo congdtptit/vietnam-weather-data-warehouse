@@ -23,7 +23,7 @@ from typing import Any
 import requests
 from minio import Minio
 from minio.error import S3Error
-from station_config import GHCNH_RAIN_STATIONS
+from station_config import GHCNH_RAIN_STATIONS, resolve_ghcnh_stations
 
 # Fallback load environment variables from .env
 try:
@@ -251,8 +251,17 @@ def main() -> int:
         help="Comma-separated WMO ids (default: all GHCNH_RAIN_STATIONS)",
     )
     parser.add_argument("--overwrite", action="store_true", help="Re-download existing objects")
+    parser.add_argument(
+        "--location", default=None, help="Only the GHCNh station(s) of this research location"
+    )
     args = parser.parse_args()
-    stations = [s.strip() for s in args.stations.split(",")] if args.stations else None
+    try:
+        stations = resolve_ghcnh_stations(args.stations, args.location)
+    except ValueError as ex:
+        parser.error(str(ex))
+    if stations == []:
+        print(f"No GHCNh station is mapped to {args.location}; nothing to do")
+        return 0
     try:
         ingest_ghcnh(args.start_year, args.end_year, stations, args.overwrite)
     except RuntimeError as ex:

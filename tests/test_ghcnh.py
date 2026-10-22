@@ -382,3 +382,14 @@ def test_extreme_support_exactly_at_the_ratio_is_accepted():
     assert not extreme_is_supported(33.7, 338.0)
     assert extreme_is_supported(49.2, 491.3) and not extreme_is_supported(49.1, 491.3)
     assert not extreme_is_supported(float("nan"), 700.0)  # no sub-daily report
+
+
+def test_location_selects_its_ghcnh_stations_or_nothing():
+    from station_config import resolve_ghcnh_stations
+
+    assert resolve_ghcnh_stations(None, "han") == ["48825"]
+    assert resolve_ghcnh_stations(None, "PTO") == []  # no station: nothing to do
+    assert resolve_ghcnh_stations("48826, 48831", None) == ["48826", "48831"]
+    assert resolve_ghcnh_stations(None, None) is None
+    with pytest.raises(ValueError, match="either"):
+        resolve_ghcnh_stations("48826", "HPH")
