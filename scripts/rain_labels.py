@@ -1,6 +1,6 @@
 """RainNext24h label generation and chronological split assignment.
 
-Implements the label contract in docs/rain-label.md (v0.2):
+Implements the label contract in docs/rain-label.md (v0.2; implementation v0.2.1):
 - Hourly precipitation is timestamped at interval end ("sum of the preceding hour"), so the
   value at hour h covers (h - 1h, h]. The target window (t, t+24h] uses the values
   timestamped t+1h through t+24h.
@@ -16,9 +16,19 @@ from __future__ import annotations
 
 import pandas as pd
 
-LABEL_VERSION = "rain_next24h_v0.2"
+LABEL_VERSION = "rain_next24h_v0.2.1"  # v0.2 definition; v0.2.1 fixes float sums at the threshold
 DEFAULT_THRESHOLD_MM = 1.0
 HORIZON_HOURS = 24
+# Rain sums are rounded before comparison or storage. Float addition of 0.1 mm values can
+# give 0.99999999999999 for an exact 1.0 mm total, which turned such windows into No in
+# rain_next24h_v0.2. Sources resolve 0.01-0.1 mm, so 3 decimals remove only float error.
+RAIN_SUM_DECIMALS = 3
+
+
+def round_rain(values: pd.Series) -> pd.Series:
+    """Round summed rain to RAIN_SUM_DECIMALS (removes float error, keeps NaN)."""
+    return values.round(RAIN_SUM_DECIMALS)
+
 
 # UTC split boundaries as [start, end) on forecast origin (docs/rain-label.md).
 SPLITS: tuple[tuple[str, pd.Timestamp, pd.Timestamp], ...] = (
@@ -70,7 +80,7 @@ def build_rain_labels(
         valid_hours = (
             reversed_future.notna().astype(int).rolling(HORIZON_HOURS, min_periods=1).sum()
         )
-        window_sum = window_sum.iloc[::-1]
+        window_sum = round_rain(window_sum.iloc[::-1])
         valid_hours = valid_hours.iloc[::-1]
 
         out = pd.DataFrame(

@@ -74,6 +74,8 @@ notebook-setup:
 	$(NOTEBOOK_VENV)/python -m pip install --require-hashes -r requirements-notebook.txt
 	$(NOTEBOOK_VENV)/python -m ipykernel install --user --name weather-notebook --display-name "Weather (notebook)"
 
+NOTEBOOK ?= eda_rain_next24h.ipynb
+
 notebook-run:
 	cd notebooks && ../$(NOTEBOOK_VENV)/jupyter nbconvert --to notebook --execute --inplace \
-		--ExecutePreprocessor.kernel_name=weather-notebook --ExecutePreprocessor.timeout=1800 eda_rain_next24h.ipynb
+		--ExecutePreprocessor.kernel_name=weather-notebook --ExecutePreprocessor.timeout=1800 $(NOTEBOOK)

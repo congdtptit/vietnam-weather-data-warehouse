@@ -679,3 +679,200 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
   - Independent check: 6 random rows (3 train, 3 validation) recomputed from the raw Silver monthly objects matched for `rain_past_6h_mm`, `rain_past_24h_mm`, `pressure_change_3h_hpa`, `humidity_percent_lag6h`, and `hour_local`.
 - Limits: features and labels both come from Open-Meteo reanalysis, so results are retrospective and the features are not proven available in real time. No imputation, encoding, or feature selection yet (ID 28, train only). The feature list was not reviewed by the team. A partial year range (for example only 2024) has no earlier history, so its first 23–24 origins per location miss the long-window features.
 - Next step: ID 28, train and tune CART on train with selection on validation 2024.
+
+## CART training and tuning (workbook ID 28) — 2026-10-21
+
+- Related work: workbook ID 28 (N3's task, done by the N1/N2 member as agreed); `docs/rain-label.md` v0.2. Decisions recorded on 2026-10-21: select by validation F1 of the Rain class; drop rows with missing features; no refit on train + validation.
+- Objective/scope: fit CART on train 2016–2023 and select parameters and the probability threshold on validation 2024. The test split was not read.
+- Changes:
+  - New `scripts/train_cart.py`. It reads the ID 23 manifest plus the train and validation files (`read_split` refuses `test`), drops rows with missing features, and builds a pipeline (unscaled numeric features + one-hot `location_code` → `DecisionTreeClassifier`). It fits a 120-configuration grid in parallel, selects the configuration and threshold, computes baselines, and writes `gold/ml_models/cart_rain_next24h_v1/model.joblib` and `report.json`.
+  - New `tests/test_train_cart.py` (4 tests): undefined metrics are `None`; tie handling for configuration and threshold; the test split is refused and never requested; reproducible training whose saved model reloads and predicts identically.
+  - Docs: `docs/rain-label.md` CART model v1 section; `docs/NAMING_CONVENTIONS.md` `ml_models` row; `README.md`; `docs/architecture.md`. Workbook ID 28: Đang làm, 90.
+- Checks: `ruff format`/`ruff check` passed; `make test` → 84 passed, 14 deselected.
+- Data (real): `train_cart.py` in the Airflow image (scikit-learn 1.5.1, 4 CPUs), 212 s.
+  - Train: 560,640 rows used, 192 dropped. Validation: 70,080 used, 0 dropped.
+  - Best F1 by depth limit: 4 → 0.763, 6 → 0.777, 8 → 0.781, 10 → 0.784, 12 → 0.785. The selection rule (within 0.005 of the best, shallowest wins) chose `max_depth=8`, `min_samples_leaf=50`, `class_weight=balanced`, `ccp_alpha=1e-4`: 88 leaves, a 19 KB artifact.
+  - Threshold 0.40 on validation: TP 28,476, FP 9,378, TN 26,066, FN 6,160; precision 0.752, recall 0.822, F1 0.786, accuracy 0.778. At 0.50: F1 0.781, recall 0.775.
+  - Baseline F1 on validation: persistence 0.753, location × month rate 0.710, always Yes 0.662; always No has recall 0.
+  - Train fit at 0.40: F1 0.793, so the gap to validation is small.
+  - Largest importances: `rain_past_12h_mm` 0.65, `dew_point_c` 0.12, `precipitation_mm` 0.10, `rain_past_24h_mm` 0.06, `pressure_hpa` 0.03.
+  - Validation breakdown (computed after selection, not used for choices):
+    - By location, F1 0.758 (HPH) to 0.812 (TNG).
+    - By season, wet season May–Oct F1 0.860 (recall 0.903); dry season Nov–Apr F1 0.602 (recall 0.624).
+    - Share of Rain cases detected by rain amount: 1–5 mm 72%, 5–20 mm 87%, ≥ 20 mm 94%.
+- Limits:
+  - Validation chose both the configuration and the threshold, so its metrics are optimistic.
+  - Independent evaluation on test 2025 is ID 29.
+  - Inputs and labels are Open-Meteo reanalysis, so the result is retrospective.
+  - The improvement over persistence is moderate (+3.3 F1 points), and dry-season performance is weak.
+  - The feature list, selection rule, and threshold have not been reviewed by the team.
+- Next step: ID 29, evaluate the frozen model and threshold once on test 2025; then ID 30, tree figure and rules.
+
+## CART test 2025 evaluation (workbook ID 29) — 2026-10-21
+
+- Related work: workbook ID 29 (N3's task, done by the N1/N2 member as agreed); `docs/rain-label.md` v0.2. The workbook mentions threshold adjustment together with test; as documented in `rain-label.md`, the threshold (0.40) was chosen on validation in ID 28 and only applied here.
+- Objective/scope: one evaluation of the frozen ID 28 model on test 2025 (all 8 locations), with baselines and breakdowns.
+- Changes:
+  - New `scripts/evaluate_cart_test.py`. It loads the model and `report.json` and checks the feature list against the feature manifest. It verifies that the model reproduces the stored validation confusion matrix before reading test, refuses to run if `test_evaluation.json` exists, and writes `test_evaluation.json` and `test_predictions.parquet` next to the model.
+  - New `tests/test_evaluate_cart_test.py` (3 tests): frozen threshold, metrics recomputable from the saved predictions, refusal of a second run; a swapped model is rejected before the test file is requested; feature-order mismatch is rejected.
+  - `tests/test_train_cart.py` fixture now includes target window columns, as in the real feature files.
+  - Docs: `docs/rain-label.md` test 2025 section; `docs/NAMING_CONVENTIONS.md` model row; `README.md`; `docs/architecture.md`. Workbook ID 29: Đang làm, 90.
+- Checks:
+  - `ruff format`/`ruff check` passed; `make test` → 87 passed, 14 deselected.
+  - Before passing, two runs failed on test-fixture issues: missing target columns, and a swapped depth-1 tree that happened to reproduce the same confusion matrix on the one-split synthetic rule, so the test now uses an always-Rain model.
+  - A third failure was a real bug: integer month keys in the evaluation dict did not survive the JSON round trip; keys are now strings.
+  - None of these runs touched real test data.
+- Data (real): `evaluate_cart_test.py` in the Airflow image, 10 s, run once.
+  - Validation reproduction passed. Coverage: 69,888 of 69,888 test labels.
+  - At threshold 0.40: TP 27,254, FP 8,782, TN 26,840, FN 7,012; precision 0.756, recall 0.795, F1 0.775, accuracy 0.774.
+  - Baseline F1: persistence 0.726, location × month rate 0.682, always Yes 0.658; always No has recall 0.
+  - By location, F1 0.763 (HBI) to 0.785 (TUQ). By season, wet May–Oct F1 0.835 (recall 0.878), dry Nov–Apr F1 0.621 (recall 0.600). January 0.524, June 0.904.
+  - Share of Rain cases detected: 1–5 mm 67%, 5–20 mm 84%, ≥ 20 mm 94%.
+  - Model SHA-256 `1f667b91…94b6` (full value in `rain-label.md`).
+- Limits:
+  - Retrospective result on Open-Meteo reanalysis; labels are reanalysis rain, not gauge rain. A GHCNh station-rain check of predictions is possible later.
+  - Test F1 is 1.1 points below validation. The model beats persistence by 4.9 F1 points on test, but performs poorly in the dry season and on light rain.
+  - Not yet reviewed by the team.
+  - Any new model version must not be evaluated on test 2025 as an independent result.
+- Next step: ID 30, tree figure and rules from this artifact; ID 31, predictions into the DW.
+
+## CART tree figure and rules (workbook ID 30) — 2026-10-21
+
+- Related work: workbook ID 30 (N3's task, done by the N1/N2 member as agreed); `docs/rain-label.md`; the artifact evaluated in ID 29.
+- Objective/scope: draw and explain the tree and extract classification rules from the evaluated model, with real feature names and units. The model was not refitted or changed.
+- Changes:
+  - New `scripts/cart_rules.py`, which:
+    - loads the model, report, and model SHA-256;
+    - merges each root-to-leaf path into one condition per variable, using whole numbers for hour/month and translating one-hot columns into `location = X`, `location ≠ X`, or `location not in {…}`;
+    - builds a leaf rule table with train rows, observed Rain share, model probability, and class at the frozen threshold;
+    - builds a node table for the top levels and the decision path of one row.
+  - New `tests/test_cart_rules.py` (4 tests): condition merging and location/integer wording; leaf rules cover every row and match `predict_proba`, and the learned synthetic rule is recovered with its units; node counts and the yes-branch are verified independently; the decision path length equals the leaf depth.
+  - New `notebooks/cart_tree_rules.ipynb`, committed with executed outputs. Its builder lives outside the repository, like the EDA notebook's. The notebook contains:
+    - a model SHA-256 check against `test_evaluation.json`;
+    - a tree figure of 3 levels in the validated sequential palette, with its node table;
+    - the top 10 Rain and No-rain rules;
+    - a coverage summary;
+    - an importance chart and table;
+    - three test-2025 examples chosen by fixed rules;
+    - key numbers, an interpretation, and all 88 rules.
+  - `Makefile` `notebook-run` accepts `NOTEBOOK=…` (default unchanged), documented in `docs/development.md`.
+  - Docs: `docs/rain-label.md` tree and rules section; `README.md`; `docs/architecture.md`. Workbook ID 30: Đang làm, 90.
+- Checks:
+  - `ruff check`/`format` passed; `make test` → 91 passed, 14 deselected.
+  - The first run failed one test whose expected text was too strict (the learned threshold was 79.92 %, not ≥ 80); the code was unchanged.
+  - `make notebook-run NOTEBOOK=cart_tree_rules.ipynb` → 0 errors, about 9 s. Both figures were rendered and inspected.
+  - The first interpretation draft stated the root branches the wrong way round. It was corrected against the printed node table, and every number in the interpretation was rechecked against cell outputs, including the shallowest split depth of each variable (Lào Cai 5, month 6, `hour_local` 4).
+- Data (real): train 2016–2023, 560,640 rows, for the rule statistics; test 2025 predictions from ID 29 for the three examples only.
+  - Root split: past-12-hour rain ≤ 0.35 mm (26% Rain, 288,873 rows) versus > 0.35 mm (77% Rain, 271,767 rows).
+  - 52 of 88 leaves predict Rain; the 10 largest rules cover 45.6% of train rows; rules have 4–7 merged conditions.
+  - Leaf probability versus observed train share differs by at most 0.009.
+  - Examples: largest-rain TP at Hà Nội (144.6 mm, p 0.97); highest-probability FP at Hà Nội (0.7 mm, p 0.97); largest-rain FN at Ninh Bình (57.9 mm, p 0.39).
+- Limits:
+  - The figure shows 3 of 8 levels.
+  - Importance and rules describe correlations in reanalysis data, not causes.
+  - Surface pressure partly encodes elevation/location.
+  - The examples are illustrations, not a full error analysis (ID 36).
+  - Not yet reviewed by the team.
+- Next step: ID 31, load predictions and `dim_model` into the DW.
+
+## Correction to the ID 30 error interpretation — 2026-10-21
+
+- Related work: workbook ID 30; follow-up to the entry above, at the user's request to check the "missed rain" explanation.
+- Problem found:
+  - The first notebook interpretation (and the report to the user) generalized from one example. It called "rain without warning" the model's main weakness, based on the largest-rain test miss.
+  - That example was selected for its size, so it is not typical. Its hourly data also contradict the wording: rain began one hour after *t*, after 0.1 mm of drizzle, under a fully overcast sky with a northerly wind and pressure 6.9 hPa higher than a day earlier.
+  - The verbal report also quoted 89% humidity at *t*; that value was six hours earlier, and humidity was 76% at *t*.
+  - Separately, `docs/rain-label.md` said wind direction was excluded from features v1 because the EDA showed no separation, but the EDA never assessed wind direction.
+- Changes:
+  - `scripts/cart_rules.py`: `hours_to_first_rain` (first rainy hour in the target window, per location on a gap-checked grid) and `missed_rain_profile`.
+  - `tests/test_cart_rules.py`: +2 tests (onset with a gap and no-rain cases; profile counts).
+  - `notebooks/cart_tree_rules.ipynb`:
+    - adds a typical-miss example (probability 0.30–0.40, under 5 mm, closest to the median miss: Lào Cai, 3.0 mm, p 0.36);
+    - adds the hourly Silver context of the extreme miss;
+    - adds a §5 error profile on validation 2024 with an onset recall chart;
+    - corrects the interpretation.
+  - `docs/rain-label.md`: error profile; wind-direction statement corrected.
+- Checks:
+  - `ruff` passed; `make test` → 93 passed, 14 deselected.
+  - `make notebook-run NOTEBOOK=cart_tree_rules.ipynb` → 0 errors after one fix (an object-dtype `round` error in the new context cell).
+  - The new chart was inspected. The notebook text was checked against the printed hourly table.
+- Data (real, validation 2024; describes errors only, no model or threshold change):
+  - Missed: 6,160 of 34,636 Rain cases (17.8%); 64.2% of misses under 5 mm; 55.3% with probability 0.30–0.40; 36.1% after a dry 24 h.
+  - Recall after a dry 24 h: 17.0% overall, 2.6% in the dry season, 31.7% in the wet season. Recall after a wet 24 h: 87.7%.
+  - Recall by onset: 1–3 h 91%, 4–6 h 71%, 7–12 h 66%, 13–18 h 61%, 19–24 h 45%.
+  - For reference, on validation a threshold of 0.35 gives recall 0.901, F1 0.784, and 4,423 more false alarms than 0.40. This trade-off is for ID 36; v1 keeps 0.40.
+- Limits: improvement options are recorded but not done:
+  - feature v2 with wind direction, humidity/cloud trends, and neighbouring-location rain, selected on validation only;
+  - a threshold comparison (ID 36);
+  - numerical weather prediction inputs (out of scope).
+  Any v2 measured on test 2025 is no longer an independent result.
+
+## Predictions and dim_model in the DW (workbook ID 31) — 2026-10-21/22
+
+- Related work: workbook ID 31 (N3 with N2 support; done by the N1/N2 member as agreed); `docs/warehouse-schema.md`; `docs/rain-label.md`. Decisions of 2026-10-21: load only test 2025 predictions (out-of-sample for the frozen model); compute actual rain in a view from the observation fact instead of storing it.
+- Changes:
+  - New migration `sql/04_predictions.sql` (idempotent):
+    - `dim_model`: versions, label and feature sources, both thresholds, horizon, training window, hyperparameters as JSONB, artifact URI and SHA-256, validation and test metrics.
+    - New columns in `fact_weather_prediction`: `model_key`, `origin_utc`, target window, `horizon_hours`, `probability_threshold`, `evaluation_split`. A guard refuses to migrate legacy rows without these values. Legacy columns are kept and filled.
+    - Constraints: unique key `(model_key, location_key, origin_utc)`; checks on window, probability, and split.
+    - Indexes on the prediction foreign keys and origin, and `idx_fwo_location_source_ts` on the observation fact.
+    - View `vw_prediction_vs_actual`: actual rain from the label source over `(target_start, target_end]`; actual and outcome are NULL unless all 24 hours exist.
+  - New `scripts/load_predictions.py`:
+    - upserts `dim_model`;
+    - checks model version, threshold, class consistency, duplicates, locations, and window length;
+    - derives Vietnam-local date/time keys;
+    - replaces the (model, split) scope in one transaction (retract and upsert).
+  - New `tests/test_load_predictions.py`:
+    - 7 unit cases: local keys across a day boundary, 4 rejection cases, model/evaluation mismatch;
+    - 3 integration tests, rolled back: migration applied twice; load, rerun and retraction; view window boundaries (rain stamped at the origin excluded, at the window end included), a NULL outcome for an incomplete window, and unique and window constraints.
+  - `Dockerfile`, `.dockerignore`, `docker-compose.yml` include the migration. Docs: `docs/warehouse-schema.md` (table rows, resolved prediction grain and model gaps), `README.md`, `docs/architecture.md`. Workbook ID 31: Đang làm, 90.
+- Checks:
+  - `ruff` passed.
+  - `make test` → 99 passed, 17 deselected.
+  - `make test-integration` → 17 passed.
+- Data (real, local DW):
+  - `04_predictions.sql` applied twice to `weather_dwh` without error.
+  - `load_predictions.py` loaded 69,888 rows in 23 s; a rerun took 16 s and gave the same `model_key` with 0 retracted.
+  - Prediction rows: 69,888 = 69,888 unique keys, origins 2025-01-01T00Z to 2025-12-30T23Z.
+  - `dim_model`: 1 row; SHA-256 prefix `1f667b913657`; `test_f1` 0.7753.
+  - The view returned outcomes for all rows (0 unknown) in about 1.4 s.
+- **Finding: label bug in ID 22.**
+  - The view's confusion matrix (TP 27,467 / FP 8,569 / TN 26,617 / FN 7,235) did not match ID 29 (TP 27,254 / FP 8,782 / TN 26,840 / FN 7,012).
+  - All 436 differing rows have a 24-hour total of exactly 1.0 mm. `scripts/rain_labels.py` sums floats, which gives values such as 0.99999999999999, so it labels them No. PostgreSQL sums NUMERIC exactly and labels them Yes, which follows the contract (≥ 1 mm). Otherwise the two sums differ by at most 3e-14 mm.
+  - Across all usable labels, 5,147 (0.734%) are wrong in this direction: train 4,237, validation 474, test 436. No error occurs in the opposite direction.
+  - Corrected Yes rates: train 51.64% (reported 50.89%), validation 50.10% (49.42%), test 49.65% (49.03%).
+  - With corrected test labels and the same frozen model and threshold: precision 0.762, recall 0.792, F1 0.777 (reported 0.756 / 0.795 / 0.775).
+  - The earlier "independent" label check used the same function, which is why it did not catch the bug.
+- Limits: only test predictions are loaded; there is no scoring DAG (ID 32) and no Power BI page (ID 33). Labels, features, EDA rates, model training, the ID 29 evaluation, and the figures quoted in docs still carry the label bug until the fix agreed on 2026-10-22 (option A: fix labels, rebuild labels/features v2, re-score the frozen v1 on corrected test labels, keep v1 unchanged).
+
+## Label float-sum fix and corrected re-score (IDs 22, 23, 21, 29, 30, 31) — 2026-10-22
+
+- Related work: the label bug found by the ID 31 reconciliation; option A agreed on 2026-10-22: fix labels, rebuild labels/features v2, re-score the frozen v1 on corrected test labels, keep model v1 unchanged.
+- Cause: `build_rain_labels` used float rolling sums. For long series, windows whose true total is exactly 1.0 mm could come out as 0.99999999999999 and were labelled No. The same applied to trailing rain features and the EDA rain sums.
+- Changes:
+  - `scripts/rain_labels.py`: `RAIN_SUM_DECIMALS = 3` and `round_rain`; window sums are rounded before the threshold and storage; `LABEL_VERSION = "rain_next24h_v0.2.1"` (definition unchanged).
+  - `scripts/build_rain_features.py`, `scripts/rain_eda.py`: trailing rain sums use `round_rain`.
+  - Default dataset versions: labels v2 and features v2. The v1 objects are kept because model v1 was trained on them.
+  - New `scripts/rescore_cart_corrected_labels.py`: requires the frozen model to reproduce the stored test probabilities (within 1e-12) and classes exactly on the v2 features, then writes `test_evaluation_corrected_labels.json` once. It also records validation metrics on corrected labels; nothing is reselected.
+  - `scripts/load_predictions.py`: `dim_model` test metrics come from the corrected re-score when it exists.
+  - Tests:
+    - Regression test with a real 28-hour Hà Nội 2025 slice. It was confirmed to fail on the v0.2 code (0.9999999999999999, No) and pass on v0.2.1 (1.0, Rain). A first attempt with ten 0.1 mm hours did not reproduce the bug and was replaced.
+    - A feature rounding test.
+    - 2 re-score tests: corrected metrics with unchanged predictions and a single run; refusal when inputs change or labels are old.
+  - Notebooks `eda_rain_next24h.ipynb` and `cart_tree_rules.ipynb` were re-executed on labels/features v2. The tree notebook's hard-coded figures were updated after rechecking the outputs. The typical-miss example printed probability 0.40 because of 2-decimal rounding; it now prints 3 decimals (0.397).
+  - Docs: `docs/rain-label.md` (implementation fix, corrected rates and test table, corrected validation figures, profile), `docs/NAMING_CONVENTIONS.md`, `README.md`. Workbook IDs 21, 22, 23, 28, 29, 30, 31 notes updated.
+- Checks:
+  - `ruff` passed; `make test` → 103 passed, 17 deselected.
+  - Both notebooks ran with 0 errors.
+- Data (real):
+  - Labels v2: 701,376 rows, 700,800 usable, 576 purged. Yes rate: train 51.64%, validation 50.10%, test 49.65%.
+  - Features v2: 700,800 rows; missing values only in the first 192 train rows.
+  - Re-score: 436 test labels changed; predictions are identical. Precision 0.762, recall 0.792, F1 0.777, accuracy 0.774 (TP 27,467 / FP 8,569 / TN 26,617 / FN 7,235). This equals the DW view `vw_prediction_vs_actual` exactly.
+  - Corrected validation at 0.40: precision 0.760, recall 0.819, F1 0.789.
+  - Corrected test baselines: persistence F1 0.729, location × month 0.684, always Yes 0.664.
+  - `load_predictions.py` rerun: 69,888 upserted, 0 retracted; `dim_model` test_f1 0.7766. `validation_f1` stays 0.7857, the value from the report on v0.2 labels.
+  - EDA on v2: August 78.5% and December 26.3% Yes; hourly range 51.3–52.0%; top separations unchanged (dew point, past-24-hour rain, humidity).
+  - Tree notebook profile on corrected validation: 18.1% of Rain missed; 64.8% of misses under 5 mm; 54.8% at probability 0.30–0.40; recall after a dry 24 h 16.6% (dry season 2.5%).
+- Limits:
+  - Model v1 was selected and fitted on v0.2 labels (0.73% wrong, all exact-1.0 mm windows). It was not retrained, because a retrained model could not claim an independent test 2025 result. A future model should train on labels/features v2.
+  - The earlier progress entries keep the v0.2 figures as they were measured.

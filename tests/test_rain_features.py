@@ -170,3 +170,11 @@ def test_export_writes_split_files_and_manifest():
     assert saved["by_split"]["validation"]["rows"] == len(val)
     # Without 2023 history the first 23 origins per location miss the 24 h features
     assert saved["missing_values_per_feature"]["rain_past_24h_mm"] == 8 * 23
+
+
+def test_trailing_rain_sums_are_free_of_float_error():
+    hourly = _hourly().assign(precipitation_mm=0.1)
+    row = _feature_at(compute_features(hourly), "HAN", "2023-12-31 06:00+00:00")
+    assert (
+        row["rain_past_24h_mm"] == 2.4 and row["rain_past_3h_mm"] == 0.3
+    )  # exact, not 2.4000000000000004

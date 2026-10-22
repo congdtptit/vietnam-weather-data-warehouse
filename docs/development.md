@@ -122,5 +122,5 @@ uv pip compile requirements-notebook.in --python-version 3.10 --universal --gene
 ```
 
 - `make notebook-setup` creates `.venv-notebook` (ignored by Git), installs the hashed lock, and registers the Jupyter kernel `weather-notebook`.
-- `make notebook-run` executes `notebooks/eda_rain_next24h.ipynb` in place. It needs MinIO running with the Silver and Gold data described in `docs/progress.md`. Notebook logic lives in `scripts/` (for example `scripts/rain_eda.py`) and is unit-tested; notebooks only display results.
+- `make notebook-run` executes `notebooks/eda_rain_next24h.ipynb` in place; `make notebook-run NOTEBOOK=cart_tree_rules.ipynb` executes the CART tree and rules notebook (ID 30). It needs MinIO running with the Silver and Gold data described in `docs/progress.md`. Notebook logic lives in `scripts/` (for example `scripts/rain_eda.py`) and is unit-tested; notebooks only display results.
 - Verified on macOS x86_64 with Python 3.12.4. Other platforms were not tested.
