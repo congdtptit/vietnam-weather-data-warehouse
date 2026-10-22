@@ -608,9 +608,15 @@ def test_process_open_meteo_to_silver_small_mock_run(monkeypatch, hourly_payload
     import transform_open_meteo_to_silver as om_silver
 
     client = Mock()
-    # Mock bronze read
+    # Mock bronze read; no manifest (legacy object)
     payload_bytes = json.dumps(hourly_payload).encode("utf-8")
-    client.get_object.return_value = SimpleNamespace(read=lambda: payload_bytes)
+
+    def get(bucket, key):
+        if "/manifests/" in key:
+            raise S3Error("NoSuchKey", "missing", "/res", "req", "host", None)
+        return SimpleNamespace(read=lambda: payload_bytes)
+
+    client.get_object.side_effect = get
     # Mock stat_object to indicate objects don't exist yet
     client.stat_object.side_effect = S3Error("NoSuchKey", "missing", "/res", "req", "host", None)
 
@@ -635,6 +641,7 @@ def test_process_open_meteo_to_silver_small_mock_run(monkeypatch, hourly_payload
     assert dq_result["total_files_transformed"] == 1
     assert dq_result["total_records_processed"] == 3
     assert len(dq_result["failures"]) == 0
+    assert dq_result["bronze_without_manifest"] == 1
 
     # Verify at least one monthly parquet was uploaded and is readable by pyarrow
     parquet_keys = [k for k in uploaded_objects if k.endswith(".parquet")]
@@ -762,3 +769,29 @@ def test_missing_bronze_file_fails_unless_allowed(monkeypatch):
         2024, 2024, target_location="HAN", allow_missing=True
     )
     assert result["failures"] == [] and result["total_files_transformed"] == 0
+
+
+@pytest.mark.parametrize("matches", [True, False])
+def test_silver_checks_bronze_bytes_against_the_manifest(monkeypatch, hourly_payload, matches):
+    import hashlib
+
+    import transform_open_meteo_to_silver as om_silver
+
+    payload_bytes = json.dumps(hourly_payload).encode("utf-8")
+    digest = hashlib.sha256(payload_bytes if matches else b"other").hexdigest()
+    manifest = json.dumps({"sha256": digest}).encode()
+
+    def get(bucket, key):
+        body = manifest if "/manifests/" in key else payload_bytes
+        return SimpleNamespace(read=lambda: body, close=lambda: None, release_conn=lambda: None)
+
+    client = Mock()
+    client.get_object.side_effect = get
+    client.stat_object.side_effect = S3Error("NoSuchKey", "missing", "/res", "req", "host", None)
+    monkeypatch.setattr(om_silver, "get_minio_client", lambda: client)
+    if matches:
+        dq = om_silver.process_open_meteo_to_silver(2024, 2024, "HAN", overwrite=True)
+        assert dq["bronze_verified_by_manifest"] == 1 and dq["failures"] == []
+    else:
+        with pytest.raises(RuntimeError, match="encountered 1 failure"):
+            om_silver.process_open_meteo_to_silver(2024, 2024, "HAN", overwrite=True)

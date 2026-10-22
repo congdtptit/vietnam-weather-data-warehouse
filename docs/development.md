@@ -44,6 +44,8 @@ uv pip compile requirements.in --python-version 3.10 --python-platform linux --g
 docker compose build airflow-webserver
 ```
 
+`cdsapi==0.7.7` (added 2026-10-22 for ERA5, ID 5) brings `ecmwf-datastores-client` 0.5.1, `multiurl` 0.3.9, and `tqdm` 4.66.4. Its credentials come from `CDSAPI_URL`/`CDSAPI_KEY` in `.env` (see `.env.example`), passed to the Airflow containers by Compose; the CDS account page shows the URL to use.
+
 Airflow 2.9.3 requires SQLAlchemy 1.4; do not upgrade to 2.x independently. `s3fs` remains at 2023.12.2 under the constraints to align `fsspec`/`aiobotocore`. Older constraints support current-version compatibility; security upgrades require a separate upgrade/testing task.
 
 Python dependencies and the Airflow base image are pinned. Dockerfile installs wheels (`--only-binary=:all:`) without additional compilers/apt packages; healthcheck `curl` is already present in the base. GeoJSON/NetCDF use native libraries bundled with wheels; current workflows do not require GDAL CLI. A new dependency without a target-architecture wheel will fail the build so support can be decided explicitly. MinIO/PostgreSQL retain existing image configuration; byte-identical rebuilds are not certified.

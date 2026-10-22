@@ -12,11 +12,15 @@ Eight northern locations:
 HAN (Hà Nội), PTO (Phú Thọ), TNG (Thái Nguyên), TUQ (Tuyên Quang),
 LCA (Lào Cai), HBI (Hòa Bình), HPH (Hải Phòng), NBI (Ninh Bình).
 
-A requested file that cannot be downloaded or uploaded is a failure: the run continues
-with the remaining files, then raises so the CLI exits 1 and Airflow can retry.
+Bronze keeps each response exactly as received, with a separate JSON manifest (request,
+retrieval time, SHA-256, coverage, response metadata) under open_meteo/manifests/. A
+requested file that cannot be downloaded or uploaded is a failure: the run continues with
+the remaining files, then raises so the CLI exits 1 and Airflow can retry.
 """
 
 import argparse
+import calendar
+import hashlib
 import io
 import json
 import os
@@ -154,32 +158,41 @@ def is_s3_not_found_error(err: Any) -> bool:
     return False
 
 
-def fetch_open_meteo_year(lat: float, lon: float, year: int, max_retries: int = 5) -> dict:
-    """Fetch one calendar year of hourly data for one coordinate.
+def bronze_keys(location_code: str, year: int) -> tuple[str, str]:
+    """Bronze object key and its manifest key for one location-year."""
+    name = f"open_meteo_{location_code}_hourly_{year}0101_{year}1231"
+    return (
+        f"open_meteo/hourly/year={year}/{name}.json",
+        f"open_meteo/manifests/year={year}/{name}.json",
+    )
 
-    Retries only transient failures (HTTP 429, 5xx, connection errors) with exponential
-    backoff; any other HTTP status fails immediately.
-    """
-    start_date = f"{year}-01-01"
-    end_date = f"{year}-12-31"
 
-    params = {
+def request_params(lat: float, lon: float, year: int) -> dict[str, Any]:
+    return {
         "latitude": lat,
         "longitude": lon,
-        "start_date": start_date,
-        "end_date": end_date,
+        "start_date": f"{year}-01-01",
+        "end_date": f"{year}-12-31",
         "hourly": HOURLY_VARIABLES,
         "wind_speed_unit": "ms",
         "precipitation_unit": "mm",
         "timezone": "UTC",
     }
 
+
+def fetch_open_meteo_year(lat: float, lon: float, year: int, max_retries: int = 5) -> bytes:
+    """Fetch one calendar year of hourly data for one coordinate; returns the response bytes.
+
+    Retries only transient failures (HTTP 429, 5xx, connection errors) with exponential
+    backoff; any other HTTP status fails immediately.
+    """
+    params = request_params(lat, lon, year)
     delay = 2
     for attempt in range(1, max_retries + 1):
         try:
             resp = requests.get(OPEN_METEO_ARCHIVE_URL, params=params, timeout=30)
             if resp.status_code == 200:
-                return resp.json()
+                return resp.content
             if resp.status_code != 429 and resp.status_code < 500:
                 raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:100]}")
             print(f"      [!] HTTP {resp.status_code}, retrying in {delay}s...")
@@ -192,16 +205,116 @@ def fetch_open_meteo_year(lat: float, lon: float, year: int, max_retries: int = 
     raise RuntimeError(f"Open-Meteo request for {year} failed after {max_retries} attempts")
 
 
+def coverage(payload: dict[str, Any], year: int) -> dict[str, Any]:
+    """Hourly coverage of a one-year response; complete means every UTC hour of the year."""
+    times = payload.get("hourly", {}).get("time", [])
+    expected = (366 if calendar.isleap(year) else 365) * 24
+    return {
+        "first_time": times[0] if times else None,
+        "last_time": times[-1] if times else None,
+        "hour_count": len(times),
+        "expected_hours": expected,
+        "complete": len(times) == expected
+        and times[0] == f"{year}-01-01T00:00"
+        and times[-1] == f"{year}-12-31T23:00",
+    }
+
+
+def hourly_equal(old: dict[str, Any], new: dict[str, Any]) -> bool:
+    """Whether two responses carry the same hourly values and units."""
+    return old.get("hourly") == new.get("hourly") and old.get("hourly_units") == new.get(
+        "hourly_units"
+    )
+
+
+def build_manifest(
+    location_code: str, year: int, raw: bytes, payload: dict[str, Any], retrieved_at: str
+) -> dict[str, Any]:
+    """Describe a stored response without modifying it."""
+    loc = NORTH_LOCATIONS[location_code]
+    return {
+        "source": "Open-Meteo Archive API",
+        "url": OPEN_METEO_ARCHIVE_URL,
+        "request_params": request_params(loc["latitude"], loc["longitude"], year),
+        "location_code": location_code,
+        "location_name": loc["name"],
+        "dataset_split": YEAR_SPLITS[year],
+        "year": year,
+        "retrieved_at_utc": retrieved_at,
+        "http_status": 200,
+        "bytes": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "coverage": coverage(payload, year),
+        "response_metadata": {
+            k: payload.get(k)
+            for k in (
+                "latitude",
+                "longitude",
+                "elevation",
+                "utc_offset_seconds",
+                "timezone",
+                "timezone_abbreviation",
+                "hourly_units",
+            )
+        },
+    }
+
+
+def _read_bytes(client: Minio, key: str) -> bytes | None:
+    try:
+        resp = client.get_object(BUCKET_BRONZE, key)
+    except S3Error as err:
+        if is_s3_not_found_error(err):
+            return None
+        raise
+    try:
+        return resp.read()
+    finally:
+        resp.close()
+        resp.release_conn()
+
+
+def plan_object(
+    client: Minio, data_key: str, manifest_key: str, overwrite: bool, replace_legacy: bool
+) -> tuple[str, bytes | None]:
+    """Decide what to do with one location-year: skip, skip_legacy, download, or replace.
+
+    A stored object is current only when its manifest exists, its SHA-256 matches the
+    manifest, and the manifest records complete coverage. An object without a manifest is a
+    legacy object (written before 2026-10-22, payload modified); it is kept unless
+    replace_legacy asks to replace it by an identical original response.
+    """
+    if overwrite:
+        return "download", None
+    stored = _read_bytes(client, data_key)
+    manifest_bytes = _read_bytes(client, manifest_key)
+    if stored is not None and manifest_bytes is not None:
+        manifest = json.loads(manifest_bytes)
+        if (
+            hashlib.sha256(stored).hexdigest() == manifest.get("sha256")
+            and manifest.get("coverage", {}).get("complete") is True
+        ):
+            return "skip", None
+        return "download", None
+    if stored is not None:
+        return ("replace", stored) if replace_legacy else ("skip_legacy", None)
+    return "download", None
+
+
 def ingest_data(
     start_year: int = 2016,
     end_year: int = 2025,
     target_location: str = None,
     target_split: str = None,
     overwrite: bool = False,
+    replace_legacy: bool = False,
 ):
-    """Download the requested location-years into Bronze.
+    """Download the requested location-years into Bronze, unchanged, with a manifest each.
 
-    Raises RuntimeError after the loop when any requested file failed.
+    Raises RuntimeError after the loop when any requested file failed. A response that does
+    not cover the whole year is a failure and is not stored. With replace_legacy, a legacy
+    object is replaced only if the new response has identical hourly values and units;
+    otherwise the difference is reported as a failure and nothing is written.
     """
     client = get_minio_client()
 
@@ -221,8 +334,7 @@ def ingest_data(
 
     total_tasks = len(locations) * len(years)
     current_idx = 0
-    success_count = 0
-    skipped_count = 0
+    counts = {"downloaded": 0, "replaced_legacy": 0, "skipped": 0, "legacy_kept": 0}
     failures: list[str] = []
 
     print("=" * 80)
@@ -235,87 +347,76 @@ def ingest_data(
     print("=" * 80)
 
     for loc_code, loc_info in locations.items():
-        loc_name = loc_info["name"]
-        lat = loc_info["latitude"]
-        lon = loc_info["longitude"]
-
-        print(f"\n>>> Location [{loc_code}] - {loc_name} ({lat}, {lon})")
-
+        print(f"\n>>> Location [{loc_code}] - {loc_info['name']}")
         for year in years:
             current_idx += 1
-            split_type = YEAR_SPLITS[year]
-            object_path = f"open_meteo/hourly/year={year}/open_meteo_{loc_code}_hourly_{year}0101_{year}1231.json"
-
-            # Skip objects that already exist (current size-based rule)
-            if not overwrite:
-                try:
-                    stat = client.stat_object(BUCKET_BRONZE, object_path)
-                    if stat.size > 2000:
-                        print(
-                            f"  [{current_idx}/{total_tasks}] (Split: {split_type.upper():<10}) {object_path} -> EXISTS ({stat.size} bytes), skipping."
-                        )
-                        skipped_count += 1
-                        continue
-                except S3Error as s3_err:
-                    if is_s3_not_found_error(s3_err):
-                        pass
-                    else:
-                        raise
-
-            print(
-                f"  [{current_idx}/{total_tasks}] (Split: {split_type.upper():<10}) Downloading {loc_code} {year} ...",
-                end="",
-                flush=True,
-            )
-
+            tag = f"  [{current_idx}/{total_tasks}] {loc_code} {year}"
+            data_key, manifest_key = bronze_keys(loc_code, year)
             try:
-                # 1. Call the Open-Meteo API
-                data = fetch_open_meteo_year(lat=lat, lon=lon, year=year)
+                action, legacy = plan_object(
+                    client, data_key, manifest_key, overwrite, replace_legacy
+                )
+                if action == "skip":
+                    print(f"{tag}: current (manifest and checksum match), skipping")
+                    counts["skipped"] += 1
+                    continue
+                if action == "skip_legacy":
+                    print(f"{tag}: legacy object without manifest kept (use --replace-legacy)")
+                    counts["legacy_kept"] += 1
+                    continue
 
-                # 2. Add pipeline metadata
-                data["_pipeline_metadata"] = {
-                    "source": "Open-Meteo Archive API",
-                    "location_code": loc_code,
-                    "location_name": loc_name,
-                    "dataset_split": split_type,
-                    "year": year,
-                    "ingested_at": datetime.now(timezone.utc).isoformat(),
-                    "hourly_record_count": len(data.get("hourly", {}).get("time", [])),
-                }
+                raw = fetch_open_meteo_year(
+                    lat=loc_info["latitude"], lon=loc_info["longitude"], year=year
+                )
+                retrieved_at = datetime.now(timezone.utc).isoformat()
+                payload = json.loads(raw)
+                cov = coverage(payload, year)
+                if not cov["complete"]:
+                    raise RuntimeError(f"incomplete response coverage {cov}")
+                if action == "replace" and not hourly_equal(json.loads(legacy), payload):
+                    raise RuntimeError(
+                        "upstream hourly data differ from the legacy Bronze object; not replaced"
+                    )
 
-                # 3. Upload the JSON to MinIO
-                json_bytes = json.dumps(data, ensure_ascii=False).encode("utf-8")
                 client.put_object(
                     bucket_name=BUCKET_BRONZE,
-                    object_name=object_path,
-                    data=io.BytesIO(json_bytes),
-                    length=len(json_bytes),
+                    object_name=data_key,
+                    data=io.BytesIO(raw),
+                    length=len(raw),
                     content_type="application/json",
                 )
-
-                records = data["_pipeline_metadata"]["hourly_record_count"]
-                print(f" DONE ({records} hourly records, {len(json_bytes) / 1024:.1f} KB)")
-                success_count += 1
+                manifest = json.dumps(
+                    build_manifest(loc_code, year, raw, payload, retrieved_at), indent=2
+                ).encode("utf-8")
+                client.put_object(
+                    bucket_name=BUCKET_BRONZE,
+                    object_name=manifest_key,
+                    data=io.BytesIO(manifest),
+                    length=len(manifest),
+                    content_type="application/json",
+                )
+                counts["replaced_legacy" if action == "replace" else "downloaded"] += 1
+                print(f"{tag}: stored {cov['hour_count']} hours, {len(raw) / 1024:.1f} KB")
 
                 # Pause 1.2 s to respect the Open-Meteo fair-use policy
                 time.sleep(1.2)
 
             except Exception as err:
-                print(f" FAILED: {err}")
-                failures.append(f"{object_path}: {err}")
+                print(f"{tag}: FAILED: {err}")
+                failures.append(f"{data_key}: {err}")
 
     print("\n" + "=" * 80)
     print(" INGESTION RESULT:")
-    print(f"  + Downloaded : {success_count} files")
-    print(f"  + Skipped    : {skipped_count} files (already present)")
-    print(f"  + Failed     : {len(failures)} files")
-    print(f"  + Bronze     : {success_count + skipped_count} / {total_tasks}")
+    for name, value in counts.items():
+        print(f"  + {name:<16}: {value}")
+    print(f"  + {'failed':<16}: {len(failures)}")
     print("=" * 80)
     if failures:
         raise RuntimeError(
             f"Open-Meteo ingestion completed with {len(failures)} failure(s): "
             + "; ".join(failures)
         )
+    return counts
 
 
 if __name__ == "__main__":
@@ -337,7 +438,14 @@ if __name__ == "__main__":
         choices=["training", "validation", "testing"],
         help="Only years of this split",
     )
-    parser.add_argument("--overwrite", action="store_true", help="Replace existing objects")
+    parser.add_argument(
+        "--overwrite", action="store_true", help="Download again even if the object is current"
+    )
+    parser.add_argument(
+        "--replace-legacy",
+        action="store_true",
+        help="Replace objects without a manifest when the new hourly data are identical",
+    )
 
     args = parser.parse_args()
 
@@ -348,6 +456,7 @@ if __name__ == "__main__":
             target_location=args.location,
             target_split=args.split,
             overwrite=args.overwrite,
+            replace_legacy=args.replace_legacy,
         )
     except KeyboardInterrupt:
         print("\n[!] Interrupted by user.")

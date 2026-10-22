@@ -4,6 +4,8 @@ Inventory 2026-10-08, based on `sql/init_dwh_schema.sql`; updated through 2026-1
 
 ## Existing model
 
+Diagram of the implemented schema (generated from the live catalog on 2026-10-22): [diagrams/star-schema.md](diagrams/star-schema.md).
+
 | Table | DDL keys and relationships |
 | --- | --- |
 | `dim_date` | PK `date_key`; day/month/quarter/year and season/weekend flags |

@@ -9,23 +9,25 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
-def test_bronze_upload_and_rerun(minio_client, ingestion, hourly_payload, monkeypatch):
-    # Three synthetic hours; never request historical data from the real API.
-    fetch = Mock(side_effect=lambda **kwargs: json.loads(json.dumps(hourly_payload)))
+def test_bronze_upload_and_rerun(minio_client, ingestion, monkeypatch):
+    # A synthetic complete year; never request historical data from the real API.
+    from test_ingestion import _year_payload
+
+    raw = json.dumps(_year_payload(2024)).encode()
+    fetch = Mock(return_value=raw)
     monkeypatch.setattr(ingestion, "fetch_open_meteo_year", fetch)
     monkeypatch.setattr(ingestion, "get_minio_client", lambda: minio_client)
-    for _ in range(2):
-        ingestion.ingest_data(2024, 2024, target_location="HAN", overwrite=True)
-    objects = list(minio_client.list_objects("bronze", recursive=True))
-    assert len(objects) == 1
-    result = minio_client.get_object("bronze", objects[0].object_name)
+    ingestion.ingest_data(2024, 2024, target_location="HAN", overwrite=True)
+    ingestion.ingest_data(2024, 2024, target_location="HAN")  # current: skipped
+    names = sorted(o.object_name for o in minio_client.list_objects("bronze", recursive=True))
+    assert names == sorted(ingestion.bronze_keys("HAN", 2024))
+    result = minio_client.get_object("bronze", ingestion.bronze_keys("HAN", 2024)[0])
     try:
-        saved = json.loads(result.read())
+        assert result.read() == raw  # received bytes, unchanged
     finally:
         result.close()
         result.release_conn()
-    assert saved["hourly"] == hourly_payload["hourly"]
-    assert fetch.call_count == 2
+    assert fetch.call_count == 1
 
 
 def test_minio_health_task(minio_client):
