@@ -106,7 +106,8 @@ Monthly examples apply to monthly requests. Current Open-Meteo ingestion downloa
 | **Open-Meteo** | `.json` | `open_meteo/hourly/year=YYYY/month=MM/open_meteo_<location>_hourly_<start_date>_<end_date>.json` | `bronze/open_meteo/hourly/year=2024/month=05/open_meteo_HAN_hourly_20240501_20240531.json` |
 | **ERA5 / ERA5-Land** | `.nc` | `era5/reanalysis/year=YYYY/month=MM/era5_north_vietnam_hourly_<YYYYMM>.nc` | `bronze/era5/reanalysis/year=2024/month=05/era5_north_vietnam_hourly_202405.nc` |
 | **Meteostat** | `.csv` | `meteostat/station_hourly/year=YYYY/meteostat_station_<station_id>_hourly_<YYYY>.csv` | `bronze/meteostat/station_hourly/year=2024/meteostat_station_48820_hourly_2024.csv` |
-| **NOAA** | `.csv` / `.txt` | `noaa/station_hourly/year=YYYY/noaa_station_<station_id>_hourly_<YYYY>.csv` | `bronze/noaa/station_hourly/year=2024/noaa_station_488200_hourly_2024.csv` |
+| **NOAA ISD** (not used; superseded by GHCNh) | `.csv` / `.txt` | `noaa/station_hourly/year=YYYY/noaa_station_<station_id>_hourly_<YYYY>.csv` | `bronze/noaa/station_hourly/year=2024/noaa_station_488200_hourly_2024.csv` |
+| **NOAA GHCNh** (implemented) | `.psv` + `.json` manifest | `ghcnh/station_hourly/year=YYYY/GHCNh_VMM000<wmo>_<YYYY>.psv`; manifest `ghcnh/manifests/year=YYYY/GHCNh_VMM000<wmo>_<YYYY>.json` | `bronze/ghcnh/station_hourly/year=2024/GHCNh_VMM00048826_2024.psv` |
 | **Boundary maps** | `.geojson` | `spatial/boundaries/<name>_<version>.geojson` | `bronze/spatial/boundaries/vietnam_northern_provinces_v1.geojson` |
 
 ---
@@ -160,6 +161,7 @@ The pattern above covers combined-source files or samples, retaining `source_nam
 | **Dim Location** | `dim_location/dim_location.parquet` | `gold/dim_location/dim_location.parquet` |
 | **Dim Source** | `dim_source/dim_source.parquet` | `gold/dim_source/dim_source.parquet` |
 | **Dim Station** | `dim_station/dim_station.parquet` | `gold/dim_station/dim_station.parquet` |
+| **ML labels (implemented)** | `ml_labels/rain_next24h_labels_<version>.parquet` + `.json` manifest | `gold/ml_labels/rain_next24h_labels_v1.parquet` |
 | **ML Dataset (CART)** | `ml_features/cart_rain_prediction_<split>_<version>.parquet` | `gold/ml_features/cart_rain_train_2016_2023_v1.parquet`<br>`gold/ml_features/cart_rain_val_2024_v1.parquet`<br>`gold/ml_features/cart_rain_test_2025_v1.parquet` |
 | **Model predictions** | `predictions/year=YYYY/month=MM/rain_predictions_cart_<YYYYMMDD>.parquet` | `gold/predictions/year=2024/month=05/rain_predictions_cart_20240501.parquet` |
 
@@ -167,16 +169,18 @@ The pattern above covers combined-source files or samples, retaining `source_nam
 
 ## 6. Northern Vietnam Research Location References
 
-| Location code (`location_code`) | Location name | Latitude (`latitude`) | Longitude (`longitude`) | Estimated elevation (`elevation_m`) | Reference WMO station |
+Latitude/longitude/elevation are the research point used for gridded sources. Reference stations were verified on 2026-10-21 against Meteostat station metadata and the NOAA ISD station history; station coordinates live in `scripts/station_config.py`. The earlier version of this table assigned 48825 (Hà Đông), 48826 (Phù Liễn), 48830 (Lạng Sơn), 48838 (Móng Cái), and 48840 (Thanh Hóa) to the wrong locations; 48816 could not be verified.
+
+| Location code (`location_code`) | Location name | Latitude (`latitude`) | Longitude (`longitude`) | Estimated elevation (`elevation_m`) | Reference WMO station (verified) |
 |:---:|---|:---:|:---:|:---:|:---:|
-| **HAN** | Hà Nội | 21.0285 | 105.8542 | 10 m | 48820 (Láng) |
-| **PTO** | Phú Thọ | 21.3986 | 105.2280 | 25 m | 48825 (Việt Trì) |
-| **TNG** | Thái Nguyên | 21.5942 | 105.8482 | 35 m | 48826 |
-| **TUQ** | Tuyên Quang | 21.8236 | 105.2153 | 50 m | 48816 |
-| **LCA** | Lào Cai | 22.4856 | 103.9707 | 80 m | 48803 |
-| **HBI** | Hòa Bình | 20.8172 | 105.3376 | 20 m | 48830 |
-| **HPH** | Hải Phòng | 20.8449 | 106.6881 | 4 m | 48838 (Phù Liễn) |
-| **NBI** | Ninh Bình | 20.2506 | 105.9745 | 5 m | 48840 |
+| **HAN** | Hà Nội | 21.0285 | 105.8542 | 10 m | 48820 (Meteostat "Ha Noi"; NOAA ISD names it Nội Bài) |
+| **PTO** | Phú Thọ | 21.3986 | 105.2280 | 25 m | None verified |
+| **TNG** | Thái Nguyên | 21.5942 | 105.8482 | 35 m | 48831 (not served by Meteostat) |
+| **TUQ** | Tuyên Quang | 21.8236 | 105.2153 | 50 m | None verified |
+| **LCA** | Lào Cai | 22.4856 | 103.9707 | 80 m | 48803 (not served by Meteostat) |
+| **HBI** | Hòa Bình | 20.8172 | 105.3376 | 20 m | None verified |
+| **HPH** | Hải Phòng | 20.8449 | 106.6881 | 4 m | 48826 (Phù Liễn) |
+| **NBI** | Ninh Bình | 20.2506 | 105.9745 | 5 m | None verified |
 
 ---
 

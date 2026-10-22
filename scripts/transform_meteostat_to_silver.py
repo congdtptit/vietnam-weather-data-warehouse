@@ -84,6 +84,12 @@ SILVER_STANDARD_COLUMNS = [
     "observation_type",
 ]
 
+# Meteostat bulk CSVs tag every value with `<variable>_source`. Only these sources are
+# station observations; model sources such as `dwd_mosmix` and `metno_forecast` are not.
+# Values from any other source (including unknown names) are removed at Silver.
+OBSERVATION_SOURCES = frozenset({"isd_lite", "metar", "synop", "national"})
+RAW_VARIABLES = ("temp", "rhum", "pres", "prcp", "wspd", "wdir", "cldc", "wpgt", "coco")
+
 MEASUREMENT_COLUMNS = [
     "temperature_c",
     "humidity_percent",
@@ -145,6 +151,48 @@ def is_s3_not_found_error(err: Any) -> bool:
     return False
 
 
+def remove_non_observation_values(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Null every raw value whose `<variable>_source` is not a station observation source.
+
+    Rows left without any raw measurement are dropped, because they carry no observation.
+    When a CSV has no `<variable>_source` columns at all (legacy format), values are kept
+    and the caller marks them `unverified_source`.
+
+    Returns the filtered frame and statistics for the DQ report.
+    """
+    present = [v for v in RAW_VARIABLES if v in df.columns]
+    source_cols = [f"{v}_source" for v in present if f"{v}_source" in df.columns]
+    stats: dict[str, Any] = {
+        "source_columns_present": bool(source_cols),
+        "observation_sources": sorted(OBSERVATION_SOURCES),
+        "values_by_source": {},
+        "model_values_removed": {},
+        "rows_without_observation_dropped": 0,
+    }
+    if not source_cols:
+        return df, stats
+
+    out = df.copy()
+    for var in present:
+        src_col = f"{var}_source"
+        has_value = out[var].notna()
+        if src_col not in out.columns:
+            # A value without a source tag cannot be verified as an observation.
+            keep = pd.Series(False, index=out.index)
+        else:
+            keep = out[src_col].isin(OBSERVATION_SOURCES)
+            counts = out.loc[has_value, src_col].fillna("missing").value_counts()
+            stats["values_by_source"][var] = {str(k): int(v) for k, v in counts.items()}
+        removed = has_value & ~keep
+        stats["model_values_removed"][var] = int(removed.sum())
+        out.loc[removed, var] = np.nan
+
+    no_observation = out[present].isna().all(axis=1)
+    stats["rows_without_observation_dropped"] = int(no_observation.sum())
+    out = out.loc[~no_observation].reset_index(drop=True)
+    return out, stats
+
+
 def clean_and_standardize_meteostat(
     raw_csv_bytes: bytes,
     station_id: str,
@@ -197,7 +245,10 @@ def clean_and_standardize_meteostat(
         }
         return empty_clean, pd.DataFrame(), dq_stats
 
-    # 1. Parse timestamps
+    # 1. Remove model-derived values; keep only station observations
+    df, source_stats = remove_non_observation_values(df)
+
+    # 1b. Parse timestamps
     df["timestamp_utc"] = pd.to_datetime(df[["year", "month", "day", "hour"]], utc=True)
     df["timestamp_local"] = (
         df["timestamp_utc"].dt.tz_convert("Asia/Ho_Chi_Minh").dt.tz_localize(None)
@@ -232,13 +283,10 @@ def clean_and_standardize_meteostat(
     df["wind_gusts_ms"] = (wpgt_numeric / 3.6).round(2).astype("float64")
     df["weather_condition_code"] = pd.to_numeric(df.get("coco"), errors="coerce").astype("float64")
 
-    # Provenance / model vs observation column
-    if "_source" in df.columns:
-        df["observation_type"] = df["_source"].astype(str)
-    elif "source" in df.columns:
-        df["observation_type"] = df["source"].astype(str)
-    else:
-        df["observation_type"] = "station_reported"
+    # Provenance: retained values passed the per-variable source filter in step 1
+    df["observation_type"] = (
+        "station_reported" if source_stats["source_columns_present"] else "unverified_source"
+    )
 
     # 4. Range validation without clipping
     df_valid, range_violations = validate_and_nullify_ranges(df)
@@ -278,10 +326,12 @@ def clean_and_standardize_meteostat(
         "deduplication": dedup_stats,
         "range_violations": range_violations,
         "null_counts": {k: int(v) for k, v in clean_standard.isnull().sum().items()},
+        "source_filter": source_stats,
         "provenance_notes": (
             "Meteostat pressure is sea-level pressure (pressure_type='sea_level'). "
-            "Bulk data may blend model reanalysis with station observations; "
-            "model vs observation policy is pending team decision per docs/data-contract.md."
+            "Values whose <variable>_source is not a station observation source "
+            f"({sorted(OBSERVATION_SOURCES)}) were removed; rows left without any "
+            "measurement were dropped (docs/data-contract.md)."
         ),
     }
 
@@ -358,6 +408,9 @@ def process_meteostat_to_silver(
         "stations": selected_stations,
         "total_files_transformed": 0,
         "total_monthly_parquet_created": 0,
+        "stale_monthly_parquet_removed": 0,
+        "total_model_values_removed": 0,
+        "total_rows_without_observation_dropped": 0,
         "total_records_processed": 0,
         "total_identical_duplicates_removed": 0,
         "total_conflicting_duplicates_quarantined": 0,
@@ -462,6 +515,55 @@ def process_meteostat_to_silver(
                 "conflicting_duplicates_count"
             ]
             overall_dq["total_missing_hours"] += dq_stats["hourly_coverage"]["missing_hours"]
+            source_filter = dq_stats.get("source_filter", {})
+            overall_dq["total_model_values_removed"] += sum(
+                source_filter.get("model_values_removed", {}).values()
+            )
+            overall_dq["total_rows_without_observation_dropped"] += source_filter.get(
+                "rows_without_observation_dropped", 0
+            )
+
+            # On overwrite, remove Silver months this run no longer produces (for example,
+            # months whose values were all model-derived), so Gold cannot reload them.
+            if overwrite:
+                produced = (
+                    set(clean_df["timestamp_utc"].dt.strftime("%Y%m"))
+                    if not clean_df.empty
+                    else set()
+                )
+                for month in range(1, 13):
+                    ym = f"{year}{month:02d}"
+                    if ym in produced:
+                        continue
+                    stale_key = (
+                        f"weather_hourly/year={year}/month={month:02d}/"
+                        f"weather_hourly_meteostat_{sid}_{ym}.parquet"
+                    )
+                    try:
+                        client.stat_object(BUCKET_SILVER, stale_key)
+                    except S3Error as s3_err:
+                        if not is_s3_not_found_error(s3_err):
+                            overall_dq["failures"].append(
+                                {
+                                    "station_id": sid,
+                                    "year": year,
+                                    "stage": "stat_stale_silver",
+                                    "error": str(s3_err),
+                                }
+                            )
+                        continue
+                    try:
+                        client.remove_object(BUCKET_SILVER, stale_key)
+                        overall_dq["stale_monthly_parquet_removed"] += 1
+                    except Exception as rm_err:
+                        overall_dq["failures"].append(
+                            {
+                                "station_id": sid,
+                                "year": year,
+                                "stage": "remove_stale_silver",
+                                "error": str(rm_err),
+                            }
+                        )
 
             # Partition by month and write to Parquet
             if not clean_df.empty:
@@ -558,6 +660,11 @@ def process_meteostat_to_silver(
         f"  + Conflicting records quarantined  : {overall_dq['total_conflicting_duplicates_quarantined']}"
     )
     print(f"  + Total missing hours across years : {overall_dq['total_missing_hours']}")
+    print(f"  + Model-derived values removed     : {overall_dq['total_model_values_removed']:,}")
+    print(
+        f"  + Rows without observation dropped : {overall_dq['total_rows_without_observation_dropped']:,}"
+    )
+    print(f"  + Stale Silver months removed      : {overall_dq['stale_monthly_parquet_removed']}")
     print(f"  + Failures encountered             : {len(overall_dq['failures'])}")
     print(f"  + Data Quality report              : silver/{dq_report_key}")
     print("=" * 80)

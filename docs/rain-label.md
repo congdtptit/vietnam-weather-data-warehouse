@@ -1,6 +1,6 @@
 # RainNext24h and Evaluation Methodology
 
-Draft v0.1, 2026-10-08. The proposal requires CART classification of rain/no-rain within the next 24 hours. This document records established decisions and items requiring team agreement. No real label/model implementation exists yet.
+Version v0.2, 2026-10-21 (label decisions confirmed by the project member working on N1/N2 on 2026-10-21; that member accepted their confirmation as team approval). Original draft v0.1: 2026-10-08. The proposal requires CART classification of rain/no-rain within the next 24 hours. This document records established decisions and items requiring team agreement. Label generation and split purging are implemented in `scripts/rain_labels.py` (tests: `tests/test_rain_labels.py`) and exported to Gold ML by `scripts/export_rain_labels.py` (`gold/ml_labels/rain_next24h_labels_v1.parquet` with a JSON manifest); no feature, model, or DW prediction implementation exists yet.
 
 ## Decisions and status
 
@@ -10,10 +10,12 @@ Draft v0.1, 2026-10-08. The proposal requires CART classification of rain/no-rai
 | Train 2016–2023, validation 2024, test 2025 | Proposal requirement |
 | Emphasize Recall; report Confusion Matrix/Accuracy/Precision/Recall/F1 | Proposal requirement |
 | Choose probability threshold on validation and freeze before test | Methodological rule preventing test-based model selection |
-| Rainfall label threshold: 0.1 or 1 mm | Unresolved; suggested workbook alternatives |
-| Station priority with ERA5 fallback | Workbook proposal; fallback scope requires agreement |
-| Whole-window versus hourly source selection | Unresolved |
-| Minimum coverage and missing-label handling | Unresolved; requiring 24 valid hours is proposed |
+| Rainfall label threshold | Decided 2026-10-21: **1 mm** summed over `(t, t+24h]`. Measured on Open-Meteo 2016–2025 (8 locations, 701,184 labelled hours): positive rate 50.5% overall; train 2016–2023 50.9%, validation 2024 49.3%, test 2025 49.0%; yearly location means 42.0–56.5%. At 0.1 mm the overall rate is 69.5% (up to 91.4% for one location-year), which makes an always-Yes baseline trivially strong. LCA is the wettest location (67.7% at 1 mm). Strong seasonality: monthly rate 25% (December) to 78% (August). The threshold is a parameter; changing it means regenerating labels only |
+| Label source | Decided 2026-10-21: Open-Meteo for the first experiment (complete coverage for 8 locations × 2016–2025). Label is gridded reanalysis rainfall, not gauge observation; Open-Meteo is largely ERA5-derived, so the experiment is retrospective. Station-first with ERA5 fallback (workbook proposal) stays open as a later extension; ERA5 fallback is not decided |
+| Whole-window versus hourly source selection | Moot for the first experiment (single source per label); revisit with any multi-source label |
+| Missing-label handling | Decided 2026-10-21: a window missing any of its 24 hourly values has no label and is excluded from evaluation; missing is not No. Minimum coverage beyond this stays open |
+| Calendar basis | `date_key`/`time_key` use UTC+7 (see data contract); labels, forecast origins, and splits use UTC |
+| Rain timestamp convention | Verified 2026-10-21 from the Open-Meteo Historical Weather API documentation: hourly `precipitation` is the "sum of the preceding hour". The value at timestamp h covers `(h-1h, h]`, so `(t, t+24h]` uses the values timestamped t+1h through t+24h |
 | Recall versus Precision/false-alarm tradeoff | Quantitative targets unresolved |
 
 The rainfall threshold in mm defines ground truth. The probability threshold defines predicted classes. They are not interchangeable.

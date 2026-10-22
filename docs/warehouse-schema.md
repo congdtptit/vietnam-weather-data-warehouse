@@ -13,8 +13,9 @@ Inventory date: 2026-10-08, based on `sql/init_dwh_schema.sql`. Distinguish exis
 | `dim_station` | PK `station_key`; UNIQUE `station_id`; FK `location_key` |
 | `fact_weather_observation` | PK `fact_id`; date/time/location/source/station FKs; nullable `station_key` |
 | `fact_weather_prediction` | PK `prediction_id`; prediction date/time, target date, and location FKs; model name/version |
+| `fact_station_daily_rain` (migration `sql/03_station_daily_rain.sql`) | PK `daily_rain_id`; UNIQUE `(source_key, station_key, rain_day_utc)`; FKs source/station/location; 24-hour gauge rain for `(D-1 12:00, D 12:00]` UTC; view `vw_rain_station_vs_model` |
 
-The DDL does not seed `dim_date`/`dim_station` and does not include `DimModel`, a real loader, or OLAP views. Fact schema existence does not establish data population.
+The DDL does not seed `dim_date`/`dim_station` and does not include `DimModel`. OLAP views live in `sql/02_olap_views.sql` (applied by the initializer for new databases and manually for existing ones): `vw_obs_hourly`, `vw_obs_daily`, `vw_obs_monthly`, `vw_obs_yearly`, `vw_coverage`, and helper `vw_calendar_month`. Fact schema existence does not establish data population.
 
 ## Grain and keys
 
@@ -45,7 +46,7 @@ The DDL does not seed `dim_date`/`dim_station` and does not include `DimModel`, 
 | Hourly rain | SUM nonoverlapping intervals for the same source/location; disclose coverage |
 | Temperature/humidity/pressure/wind speed | Appropriate AVG/MIN/MAX; roll up means from sums/counts or weights |
 | Wind direction | Circular/vector aggregation, not a linear AVG of degrees |
-| Rainy/hot days | Create source × location × day flags under agreed thresholds/coverage, then count |
+| Rainy/hot days | Source × location × local-day flags, then count. Decided 2026-10-21: rainy day = 24 valid rain hours and daily rain ≥ 1.0 mm; hot day = 24 valid temperature hours and daily maximum ≥ 35.0 °C. Incomplete days are unknown (NULL), and a month with no complete day reports NULL, not 0 |
 | Forecast probability | Summarize a defined forecast population; do not SUM or interpret mean as regional probability |
 
 Do not add rain across sources at the same point/hour. Do not add rainfall across points and call it regional mean rainfall. Partial totals are not complete daily totals. Day/month/year views need source/location/calendar basis and valid/expected counts; joins must not multiply rows.
