@@ -34,6 +34,7 @@ MANIFEST
 # Virtual Environments
 .env
 .venv
+.venv-*/
 env/
 venv/
 ENV/
@@ -74,6 +75,9 @@ data/gold/*
 *.hdf5
 *.tar.gz
 *.zip
+
+# Local analysis artifacts (diagrams, review reports); shared outside the repository
+outputs/
 
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints

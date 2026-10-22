@@ -18,6 +18,9 @@ WORKDIR /workspace
 COPY scripts/ ./scripts/
 COPY dags/ ./dags/
 COPY sql/init_dwh_schema.sql ./sql/init_dwh_schema.sql
+COPY sql/02_olap_views.sql ./sql/02_olap_views.sql
+COPY sql/03_station_daily_rain.sql ./sql/03_station_daily_rain.sql
+COPY sql/04_predictions.sql ./sql/04_predictions.sql
 COPY tests/ ./tests/
 COPY pyproject.toml ./pyproject.toml
 ENV WEATHER_TESTING=1 \

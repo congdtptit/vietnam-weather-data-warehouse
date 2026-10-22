@@ -55,6 +55,9 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./sql/01_init_postgres.sh:/docker-entrypoint-initdb.d/01_init_postgres.sh
       - ./sql/init_dwh_schema.sql:/docker-entrypoint-initdb.d/schema/init_dwh_schema.sql
+      - ./sql/02_olap_views.sql:/docker-entrypoint-initdb.d/schema/02_olap_views.sql
+      - ./sql/03_station_daily_rain.sql:/docker-entrypoint-initdb.d/schema/03_station_daily_rain.sql
+      - ./sql/04_predictions.sql:/docker-entrypoint-initdb.d/schema/04_predictions.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-airflow}"]
       interval: 5s

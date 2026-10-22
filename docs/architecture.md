@@ -1,6 +1,6 @@
 # System Architecture
 
-This document describes the proposal's target architecture separately from the current implementation. Inventory date: 2026-10-08. See [progress](progress.md) for verification evidence and outstanding work.
+This document describes the proposal's target architecture separately from the current implementation. First inventory: 2026-10-08; component status updated 2026-10-21. See [progress](progress.md) for verification evidence and outstanding work.
 
 ## Target workflow
 
@@ -24,14 +24,18 @@ Observations retain separate sources. Gold for DW and Gold for ML have different
 
 ## Components and current implementation
 
+Status as of 2026-10-21; [progress](progress.md) holds the commands, row counts, and limits behind each row.
+
 | Component | Target | Repository evidence |
 | --- | --- | --- |
-| Docker Compose | MinIO, PostgreSQL, Airflow | Configuration exists; runtime was not checked during the inventory |
-| Open-Meteo | Hourly data, 2016–2025, eight points | Annual download script and manually triggered split-based DAG |
-| ERA5, stations, boundaries | Real NetCDF, CSV/Text, GeoJSON sources | No real collectors/transformations found; synthetic test fixtures exist |
-| Bronze/Silver/Gold | Contracted data layers | Bucket initialization and temporary Bronze pytest uploads; no real Silver/Gold ETL |
-| DW | Dimensions, facts, loading, and OLAP | Initialization DDL and seeds; no loader/OLAP views |
-| ML and BI | CART, predictions in DW, dashboards | No model or Power BI artifacts found |
+| Docker Compose | MinIO, PostgreSQL, Airflow | Runs locally; build and integration tests pass |
+| Open-Meteo | Hourly data, 2016–2025, eight points | Annual download script and manually triggered DAG; full 10-year Bronze → Silver → Gold → DW run on one local machine |
+| Stations | Meteostat hourly and NOAA GHCNh daily rainfall | Verified station registry (`scripts/station_config.py`). Meteostat: script ETL into the observation fact, model-derived values removed; only Hà Nội is mapped and it reports no rainfall. GHCNh: five stations into `fact_station_daily_rain` |
+| ERA5, boundaries | Real NetCDF and 63-province (pre-merger) GeoJSON | No collectors yet; synthetic GeoJSON test fixture only |
+| Bronze/Silver/Gold | Contracted data layers | Script-based ETL for all three layers; Bronze still reserializes Open-Meteo payloads and has no manifests (ID 8) |
+| DW | Dimensions, facts, loading, and OLAP | DDL, seeds, idempotent loaders, OLAP views (`sql/02_olap_views.sql`, `sql/03_station_daily_rain.sql`); no Airflow DAG for Bronze → DW (ID 17) |
+| ML | CART, predictions in DW | RainNext24h labels, the v1 feature dataset, and CART model v1 (tuned on validation 2024, evaluated once on test 2025) in Gold ML, plus EDA and tree/rules notebooks; test 2025 predictions loaded into `fact_weather_prediction` with `dim_model` (`sql/04_predictions.sql`); no scoring DAG (ID 32) |
+| BI | Power BI dashboards | Build guide `docs/powerbi-dashboard-v1.md`; no PBIX file |
 
 ## Runtime and connections
 

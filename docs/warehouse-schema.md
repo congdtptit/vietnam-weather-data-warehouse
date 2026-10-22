@@ -12,9 +12,11 @@ Inventory date: 2026-10-08, based on `sql/init_dwh_schema.sql`. Distinguish exis
 | `dim_source` | PK `source_key`; UNIQUE `source_name`; type/format/frequency; four seed sources |
 | `dim_station` | PK `station_key`; UNIQUE `station_id`; FK `location_key` |
 | `fact_weather_observation` | PK `fact_id`; date/time/location/source/station FKs; nullable `station_key` |
-| `fact_weather_prediction` | PK `prediction_id`; prediction date/time, target date, and location FKs; model name/version |
+| `fact_weather_prediction` (extended by migration `sql/04_predictions.sql`) | PK `prediction_id`; UNIQUE `(model_key, location_key, origin_utc)`; FKs model/location/prediction date and time/target date; `origin_utc`, target window `(target_start_utc, target_end_utc]` with `target_start_utc = origin_utc` and a CHECK on `horizon_hours`; `rain_probability`, `rain_next_24h`, `probability_threshold`, `evaluation_split`. `prediction_date_key`/`prediction_time_key` are the Vietnam local date and hour of the origin; `target_date_key` is the local date of `target_end_utc`; `predicted_at` is load time |
+| `dim_model` (migration `sql/04_predictions.sql`) | PK `model_key`; UNIQUE `(model_name, model_version)`; algorithm, label/feature versions and sources, label threshold (mm), probability threshold, horizon, training window, hyperparameters (JSONB), artifact URI and SHA-256, validation/test metrics, availability note |
+| `fact_station_daily_rain` (migration `sql/03_station_daily_rain.sql`) | PK `daily_rain_id`; UNIQUE `(source_key, station_key, rain_day_utc)`; FKs source/station/location; 24-hour gauge rain for `(D-1 12:00, D 12:00]` UTC; view `vw_rain_station_vs_model` |
 
-The DDL does not seed `dim_date`/`dim_station` and does not include `DimModel`, a real loader, or OLAP views. Fact schema existence does not establish data population.
+The DDL does not seed `dim_date`/`dim_station`. `dim_model` and the prediction keys come from `sql/04_predictions.sql`, which also adds index `idx_fwo_location_source_ts` on the observation fact and view `vw_prediction_vs_actual` (prediction versus label-source rain over the same window; actual and outcome are NULL unless all 24 hours exist). OLAP views live in `sql/02_olap_views.sql` (applied by the initializer for new databases and manually for existing ones): `vw_obs_hourly`, `vw_obs_daily`, `vw_obs_monthly`, `vw_obs_yearly`, `vw_coverage`, and helper `vw_calendar_month`. Fact schema existence does not establish data population.
 
 ## Grain and keys
 
@@ -32,11 +34,11 @@ The DDL does not seed `dim_date`/`dim_station` and does not include `DimModel`, 
 | Date dimension | Seeded (2016–2026) | 4,018 daily records seeded via `scripts/seed_dimensions.py` |
 | Boundaries | One `province` column | Old/new province mapping, codes, version/effective dates; SCD2 if history is required |
 | Stations | Globally unique `station_id` | Verify source-specific namespaces, distance mapping, and selection rules |
-| Prediction grain | No unique key or UTC origin/target window | Location × origin × horizon × model version, plus source/scenario when needed |
-| Models | Fact stores name/version | Design `dim_model` and appropriate artifact metadata |
+| Prediction grain | Resolved in `sql/04_predictions.sql` (2026-10-21): model version × location × UTC origin, fixed 24 h horizon per model | Add a scenario/source column only if several input configurations are scored |
+| Models | Resolved: `dim_model` with versions, thresholds, artifact hash, and metrics | Loader `scripts/load_predictions.py` upserts on `(model_name, model_version)` |
 | Loader | Implemented and verified | `scripts/load_gold_observations.py` performs idempotent transactional upsert with rollback on failure |
 
-`predicted_at` is currently a TIMESTAMP row-creation time, not forecast origin. One `target_date_key` cannot represent every rolling 24-hour window. Probability/threshold/label version and UTC target start/end require design during ML integration.
+`predicted_at` is a row-load time, not the forecast origin; use `origin_utc`. A rolling 24-hour window usually spans two local dates, so `target_date_key` (date of the window end) is only a calendar convenience; reconcile on `target_start_utc`/`target_end_utc`.
 
 ## Aggregation rules
 
@@ -45,7 +47,7 @@ The DDL does not seed `dim_date`/`dim_station` and does not include `DimModel`, 
 | Hourly rain | SUM nonoverlapping intervals for the same source/location; disclose coverage |
 | Temperature/humidity/pressure/wind speed | Appropriate AVG/MIN/MAX; roll up means from sums/counts or weights |
 | Wind direction | Circular/vector aggregation, not a linear AVG of degrees |
-| Rainy/hot days | Create source × location × day flags under agreed thresholds/coverage, then count |
+| Rainy/hot days | Source × location × local-day flags, then count. Decided 2026-10-21: rainy day = 24 valid rain hours and daily rain ≥ 1.0 mm; hot day = 24 valid temperature hours and daily maximum ≥ 35.0 °C. Incomplete days are unknown (NULL), and a month with no complete day reports NULL, not 0 |
 | Forecast probability | Summarize a defined forecast population; do not SUM or interpret mean as regional probability |
 
 Do not add rain across sources at the same point/hour. Do not add rainfall across points and call it regional mean rainfall. Partial totals are not complete daily totals. Day/month/year views need source/location/calendar basis and valid/expected counts; joins must not multiply rows.

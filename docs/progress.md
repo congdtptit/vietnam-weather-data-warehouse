@@ -338,3 +338,541 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
 - Data scope: Isolated mock objects and synthetic test DataFrames. No production MinIO data or PostgreSQL DW facts modified.
 - Limits: Integration probe `test_rereview_retracted_silver_row_removed_from_gold_and_dw` requires active test docker containers (`pg-test` and `minio-test`).
 - Next step: All code and unit regression tests passed; ready for final review and PR merge.
+
+## Bounded MinIO demonstration — 2026-10-13
+
+- Related work: workbook IDs 2 (buckets), 8 (Open-Meteo Bronze), and 10 (Silver cleaning); draft data contract v0.1. This is sample verification, not full task acceptance. Workbook assignments/statuses were not changed.
+- Objective/scope: Start MinIO for a teacher demonstration, inspect existing data, and prepare a small real-data cleaning example plus an explicitly synthetic error example. The Compose project's MinIO volume was newly created; all three buckets initially contained zero objects. No pre-existing data was removed.
+- Changes/artifacts: Started `minio` and `minio-init`; created objects only under `demo/20261013T064756Z/real/` and `demo/20261013T064756Z/synthetic/` in Bronze/Silver. Local copies are under `data/bronze/demo/20261013T064756Z/` and `data/silver/demo/20261013T064756Z/` (ignored data directories). A temporary helper `/private/tmp/weather_minio_demo.py` called the existing `clean_and_standardize_open_meteo` function; no production pipeline, SQL, model, or DAG code changed.
+- Commands/checks actually executed:
+  - Initial `docker info` failed because Docker Desktop was stopped; sandboxed application lookup/socket access also failed. Opened `/Applications/Docker.app` and used approved Docker access.
+  - `docker compose up -d minio minio-init`: PASS; three buckets created and MinIO remained running. Image version reported `RELEASE.2026-09-22T19-25-18Z` on linux/amd64.
+  - `docker compose run --rm --no-deps -T --entrypoint python -v /private/tmp/weather_minio_demo.py:/tmp/weather_minio_demo.py:ro airflow-webserver /tmp/weather_minio_demo.py`: exit 0. Temporary Python container only; no Airflow webserver/scheduler or PostgreSQL process started. Compose also created an unused PostgreSQL volume while resolving the service configuration.
+  - Helper assertions: API UTC offset and wind/rain units; 48 equal-length hourly arrays; unique clean business keys; Parquet/PyArrow round-trip equality; downloaded SHA-256 equals uploaded content for every demo object; expected synthetic cleaning counts. All passed.
+  - Same-key upload rerun: object counts unchanged (Bronze 4, Silver 7, Gold 0). This checks replacement/object counts, not the full ingestion/ETL rerun or coverage outside the sample.
+  - `docker run --rm --network none --entrypoint python weather-airflow:2.9.3-python3.10 ...`: Python 3.10.14, Airflow 2.9.3, pandas 2.1.4, PyArrow 16.1.0. Demo run started at 06:47:56 UTC; elapsed execution duration was not separately measured.
+  - `curl` checks: API `/minio/health/live` HTTP 200; console HTTP 200. `open http://localhost:9001` succeeded. Browser automation was unavailable due to a tool sandbox initialization error; console login was not automated or verified.
+- Real data: One live Open-Meteo Archive API request for HAN coordinates (21.0285, 105.8542), eight variables, `[2024-02-29T00:00:00Z, 2024-03-02T00:00:00Z)`. Preserved original response bytes in the demo Bronze object. 48 input rows → 48 Silver rows; 48/48 expected hours present, zero missing hours, nulls, conflicts, or range violations for these variables. This is historical API/reanalysis data, not verified station observations or a forecast.
+- Synthetic data: Seven deliberately constructed rows over six expected hours on 2024-03-01, clearly labeled in paths, payload, reports, and object metadata. One identical duplicate removed; two conflicting rows excluded and saved separately; four clean rows remain. One humidity value of 150% and one precipitation value of -2 mm became null. Two hours are missing from the clean output, one absent originally and one removed because of conflicting measurements. No imputation was performed.
+- Limits: Gold stayed empty; no DW loading, ML, Power BI, full historical download, Meteostat real-data run, main pipeline integration, or full test-suite rerun. Demonstration prefixes are intentionally separate from production object paths and are not evidence of full-scope ETL acceptance.
+- Next step: Demonstrate raw JSON/CSV, cleaned Parquet/CSV, quality reports, and conflicting-record CSV; then implement and verify a bounded Gold/DW slice under agreed contracts.
+
+## DFD explanation with DW-sourced analytics and ML — 2026-10-13
+
+- Related work: workbook IDs 3 (schema/design), 17 (integrated flow), and 31 (prediction integration), plus `docs/business-requirements.md` section 3, which permits an ML dataset exported from the DW. Design explanation only; no full-task acceptance or assignment/status change.
+- Objective/scope: Explain the user's requested target flow in two images: Gold observation data loads into DW; both historical analytics and ML read DW; scoring writes predictions back to DW. The earlier direct Gold-to-ML diagram is an alternative design, not an implemented requirement. Domain contracts, label/source decisions, and production architecture documents were not changed or approved by these illustrations.
+- Changes/artifacts: `outputs/dfd-weather-20261013/build_diagrams.py`, `dfd-level-0.png/.svg`, and `dfd-level-1.png/.svg`. Vietnamese diagram labels match the user's explanatory conversation; generator identifiers, comments, and logs use English. Level 0 is explicitly the context diagram (one system process); level 1 decomposes it into seven processes. Images distinguish code/sample verification from missing Gold, loaders, ML, and BI.
+- Checks: Bundled Python 3.12/Pillow executed the generator successfully (final tool run 0.46 s). Level 0 has three nodes/four labeled flows; level 1 has fourteen nodes/seventeen labeled flows. Assertions validated flow endpoints. Both PNGs were visually inspected, then regenerated to resolve process-number/title overlap and reposition labels; final visual inspection passed. PNG dimensions are 3200×1700 and 3560×2780. SVG XML and DW-routing checks passed; `git diff --check` passed.
+- Data/runtime scope: Diagram authoring only. No new API calls, data processing, SQL/schema changes, historical downloads, services, training, or test-suite runs. Previous 48-hour real-data demo appears only as a bounded status annotation.
+- Limits/next step: These are explanatory target diagrams, not evidence that the DW-first pipeline or any model exists. Confirm DFD level naming with the course's convention if its context diagram is named separately; agree ML export/preprocessing and prediction contracts before implementation.
+
+## Full workflow and detailed warehouse diagrams — 2026-10-13
+
+- Related work: workbook IDs 3/13 (warehouse structure), 17 (full ETL), 21–23/28–30 (ML preparation/evaluation), and 31–33 (prediction integration). User requested more detailed explanatory images; no implementation or workbook acceptance update.
+- Scope/changes: Added `outputs/dfd-weather-20261013/build_full_diagrams.py`, `weather-full-flow.png/.svg`, and `star-schema-detail.png/.svg`. Reused the earlier renderer; previous context/level-1 images retain their content. The full workflow includes sources, Bronze/Silver/Gold, dimension-first DW loading, analytics/Power BI, EDA/labels/features/CART, chronological train/validation/test, model storage, scoring, prediction writeback, user requests, and Airflow's orchestration role. The relationship diagram is separate from the workflow and includes every column extracted from the seven existing DDL tables, plus explicitly proposed DimModel fields.
+- Checks: Bundled Python 3.12/Pillow generator exited 0; render/validation command completed in 1.81 s before the final small label/flow adjustment. Assertions found seven DDL tables and seventeen observation-fact columns. Diagram endpoint checks passed (workflow fourteen nodes/sixteen labeled flows; schema eight nodes/ten relationships). Python AST, PNG integrity, and SVG XML passed. Both images were visually inspected; overlapping arrow labels were repositioned, then final affected image inspected. `git diff --check` passed.
+- Artifacts: Workflow PNG 4720×3880; schema PNG 4800×4620; vector SVG siblings allow zoom without raster text loss. PK/FK/UQ and nullable observation station keys are identified. Notes retain unresolved date/time calendar basis, multiple-station handling, incomplete prediction origin/window/uniqueness, and Silver pressure/provenance columns missing from current DW.
+- Data/runtime: Diagram authoring and read-only DDL parsing only. No API calls, ETL, SQL execution, migrations, service changes, training, or model evaluation. Prior 48-hour Open-Meteo demo is a status annotation, not expanded data scope.
+- Limits/next step: DW-first ML remains an explanatory target, and DimModel metadata fields are proposals. Gold, loader, model, scoring, and BI are marked pending; no schema/database was changed. Validate the proposed contracts before implementing the next bounded Gold/DW slice.
+
+## High-level architecture image — 2026-10-13
+
+- Related work: workbook IDs 1 (Docker environment), 17 (orchestration), and 31–33 (ML/BI integration). User requested an HLD illustration; no implementation acceptance or assignment/status change.
+- Scope/changes: Added `outputs/dfd-weather-20261013/build_hld.py` and `hld-weather-platform.png/.svg`. Compared `docker-compose.yml`, `Dockerfile`, and architecture documentation. Diagram shows external sources/operator browser, Docker Compose/weather-network boundary, Python ETL/DQ, Airflow 2.9.3/Python 3.10/LocalExecutor, MinIO buckets/persistent volume, PostgreSQL 16 with distinct Airflow metadata and weather DW databases, a proposed Python CART module, external Power BI, and users. Data connections are solid; orchestration/UI/metadata connections are dashed. UI/API/DB ports are labeled with configured defaults where applicable; no credentials are included.
+- Checks: Bundled Python 3.12/Pillow generator exited 0 (initial run 1.23 s); endpoint validation covered eleven nodes/fourteen labeled connections. Python AST, SVG XML, and PNG integrity passed. Image was visually inspected, two intersecting labels were moved and a caption typo corrected, then regenerated and visually rechecked. PNG is 5640×3580. `git diff --check` passed.
+- Data/runtime: Documentation image only. No Compose/service changes, APIs, ingestion, SQL execution, database alterations, training, or runtime tests. The existing MinIO/48-hour demo is referenced as prior bounded evidence.
+- Limits/next step: HLD represents the user's DW-first target, not a fully running stack. Gold/loader/ML/BI remain pending, model artifact storage is unresolved, and the Python ML box is a proposed module rather than an existing separate service. Current Compose uses one PostgreSQL server for both database roles. Confirm contracts before implementing the next bounded pipeline increment.
+
+## Review of bacnx Gold/DW pull request #5 — 2026-10-16
+
+- Related work: workbook IDs 9/10 (ingestion/Silver error handling), 11/12 (station/calendar dimensions), 16 (Gold), and 18 (fact loading); `docs/data-contract.md` draft v0.1 and `docs/warehouse-schema.md`. Workbook task ownership/status was read from the existing allocation workbook and was not changed. This entry records review evidence, not task acceptance.
+- Objective/scope: Review `origin/feat/gold-etl-and-dwh-loading` at `78873303a4aad41f9b808ea8b3b562fa2bcc7aee` against `origin/main` at `85dd9be39e22848bfb612340a1feed8fb5f295e4`. Fetched remote refs and reviewed the two-commit, ten-file change from an archive in `/private/tmp/bacnx-review.9zutlq`, preserving the active checkout and its existing changes. GitHub PR #5 targets main; public API reported a clean merge and successful `Lint and tests` check at this head. Branch protection and required approvals were not inspected.
+- Changes/artifacts: Added `outputs/reviews/bacnx-20261016/review.md`, `test_review_regressions.py`, `offline-regressions.log`, and `gold-integration.log`. Application code, domain contracts, database schema, and remote PR contents were not edited. The probes were copied into the temporary archive's `tests/` directory to use its existing isolation fixtures.
+- Checks/environment: Existing Docker image `weather-tests:2.9.3-python3.10` (Python 3.10.14/Airflow 2.9.3), PostgreSQL 16 and MinIO on an isolated internal Compose network with tmpfs. Archived `.venv/bin/ruff` equivalent checks used the repository tooling executable: `ruff check scripts dags tests` and `ruff format --check scripts dags tests` both passed (18 baseline files). Original offline command `docker run --rm --network none --mount type=bind,src=/private/tmp/bacnx-review.9zutlq,dst=/app,readonly --workdir /app -e WEATHER_TESTING=1 -e PYTHONDONTWRITEBYTECODE=1 weather-tests:2.9.3-python3.10 -m 'not integration' -p no:cacheprovider` passed 39 tests, with 6 deselected, in 9.34 s. Original `tests/test_integration.py -m integration -p no:cacheprovider` through the temporary Compose project passed 6 tests in 4.15 s. Existing Airflow deprecation/NumPy binary-size warnings were emitted; they did not fail tests. No fresh image build was performed.
+- Failed checks and findings: Supplemental offline `tests/test_review_regressions.py -m 'not integration' -q -p no:cacheprovider` failed 7 probes in 2.02 s, confirming five distinct defects: location-filtered reruns overwrite consolidated monthly Gold; Silver read failures are swallowed; conflicting duplicates are silently kept-first; supplied local timestamps can assign incorrect date keys; and arbitrary `404` substrings in S3 request IDs misclassify server errors in three modules. Supplemental integration `tests/test_review_regressions.py -m integration -p no:cacheprovider -v` passed the happy-path slice and failed SQL recovery (1 passed/1 failed/7 deselected in 1.90 s): one failed month leaves the connection aborted and prevents the next valid month's commit. `git diff --check origin/main...origin/feat/gold-etl-and-dwh-loading` failed on Markdown whitespace/EOF issues in the branch. Review probe lint/format passed after correcting fixture formatting; AST parsing passed for 19 files. Detailed commands and source permalinks are in the review artifact.
+- Data: Synthetic observations only. Successful Gold/DW slice: Open-Meteo and Meteostat × HAN/PTO × `[2024-02-29T16:00:00Z, 2024-02-29T19:00:00Z)`, 12 input/Gold/fact rows, still 12 facts after rerun; 8 rows mapped to local March 1 and four source/location rain sums were 3 mm each. Seed checks used 366 generated dates for 2024 and 10 existing registry stations. Failure probe: invalid January source key followed by one valid February observation; February committed zero rows because no rollback occurred. Offline fixtures used tiny in-memory Parquet objects and constructed S3 errors. No weather API calls, historical downloads, or production DW/MinIO access occurred.
+- Evidence/cleanup: `outputs/reviews/bacnx-20261016/` contains the report, reproducible probes, and supplemental failure logs. Compose commands used only project `bacnx-review-20261016` with the archived `docker-compose.test.yml`; its two containers and network were removed successfully using `down --volumes --remove-orphans`. Existing services/volumes were not used. Initial sandbox access restrictions were resolved through authorized escalation; a Python HTTPS metadata read failed local certificate validation, and the same public metadata was subsequently read successfully with curl using certificate validation.
+- Limits: No independent verification of the branch's claimed 994,145 real rows or full 2016–2025 coverage. Existing six integration tests do not exercise the new Gold loader; the bounded supplemental slice does not establish full acceptance. Local calendar approval claimed in branch progress remains inconsistent with unresolved domain contracts. Workbook status and task acceptance remain separate from these technical checks.
+- Next step: Request changes before merge. Fix the six reproduced defects, maintain regression coverage in the main test suite, reconcile approved calendar/documentation decisions, and rerun bounded publication/rerun/failure-resumption checks. No merge or external review/comment was submitted.
+
+## Re-review of bacnx Gold/DW pull request #5 — 2026-10-17
+
+- Related work: workbook IDs 9/10 (ingestion/Silver), 11/12 (dimensions), 16 (Gold), and 18 (observation loading); draft data contract v0.1 and warehouse schema. Read relevant allocation rows from `Theo dõi công việc!A13:O17`, `A20:O20`, and `A22:O22`; ownership/status was not changed. This is review evidence, not full task acceptance.
+- Objective/scope: Re-review head `317f06d8fc220627987c45720a730b8c4da7383a` against main `85dd9be39e22848bfb612340a1feed8fb5f295e4`. `git ls-remote --heads origin` confirmed current remote heads; public PR #5 metadata reported open/unmerged/clean mergeability, with successful CI check runs at this head. Archive at `/private/tmp/weather-bacnx-review-20261017` preserved the active checkout and existing uncommitted work.
+- Changes/artifacts: Added `outputs/reviews/bacnx-20261017/review.md`, `test_additional_review.py`, `additional-offline.log`, and `additional-integration.log`. Application code, domain contracts, SQL schema, workbook, and remote PR contents were not edited. Appended this entry without replacing earlier local evidence.
+- Checks: Repository `.venv/bin/ruff check` and `ruff format --check` on archived `scripts dags tests` passed (19 baseline files); `git diff --check origin/main...origin/feat/gold-etl-and-dwh-loading` passed. Original `docker run --rm --network none --mount type=bind,src=/private/tmp/weather-bacnx-review-20261017,dst=/app,readonly --workdir /app -e WEATHER_TESTING=1 -e PYTHONDONTWRITEBYTECODE=1 weather-tests:2.9.3-python3.10 -m 'not integration' -p no:cacheprovider` passed 43 tests/8 deselected in 10.02 s. Isolated Compose `run --rm --no-deps --volume /private/tmp/weather-bacnx-review-20261017:/app:ro --workdir /app -e PYTHONDONTWRITEBYTECODE=1 tests -m integration -p no:cacheprovider` passed 8 tests/43 deselected in 6.98 s. Maintained regressions for the earlier review scenarios passed; domain calendar descriptions now align with implementation. Existing Airflow deprecation/NumPy binary-size warnings remained. Python AST parsing passed for 20 files including additional probes; probe Ruff check/format passed after formatting.
+- Failed checks: Supplemental `tests/test_additional_review.py -m 'not integration' -p no:cacheprovider -v` failed 3 probes in 1.66 s: a listed Silver object returning `NoSuchKey` is skipped without blocking incomplete publication; naive timestamps are silently assigned UTC; out-of-month timestamps pass monthly curation. Supplemental `tests/test_additional_review.py -m integration -p no:cacheprovider -v` failed 1 probe in 1.64 s: after removing one Silver key and rerunning HAN, Gold had 2 keys while DW retained 3 because Gold replaces the scoped rows and DW only upserts. Commands and source permalinks are in the review artifact.
+- Data: Synthetic Open-Meteo × HAN/PTO over `[2024-09-01T16:00:00Z, 2024-09-01T18:00:00Z)`: initial 3 Silver/Gold/fact keys; corrected Silver/Gold 2 versus DW 3 after rerun, with PTO preserved. Date seeding generated 366 days for 2024 only in the temporary database. Offline cases used tiny Parquet/error fixtures. No weather API, production data reads/writes, historical downloads, ML training/evaluation, or real ten-year reconciliation occurred.
+- Evidence/cleanup: `outputs/reviews/bacnx-20261017/` contains the reproducible probe and full supplemental failure logs. Existing Python 3.10.14/Airflow 2.9.3 test image reused; PostgreSQL 16/MinIO ran only under project `bacnx-review-20261017`, internal network/tmpfs/no host ports. `down --volumes --remove-orphans` successfully removed its containers/network. No existing services/volumes changed. Initial sandboxed fetch/Docker access failed; permitted read-only remote checks and isolated Docker operations succeeded subsequently; no approval review rejection occurred.
+- Limits: No fresh image build, branch-protection review, independent calendar approval verification, or verification of the branch's claimed 994,145 real observations/full 2016–2025 coverage. Passing baseline tests and remote CI does not establish full task acceptance.
+- Next step: Request changes before merge. Block inconsistent/missing input snapshots; define matching retraction/replacement semantics across Gold and DW without deleting data on incomplete input; enforce aware timestamps and UTC monthly bounds; add maintained regressions and rerun the bounded publication/reconciliation checks. No merge or external review/comment submitted.
+
+## Workbook status update and `main` verification — 2026-10-21
+
+- Related work: all 40 workbook rows in `Theo dõi công việc` (columns M/N/O only); evidence for IDs 1–3, 6–13, 16, 18. User explicitly requested a workbook status update. Assignments, weeks, and dates were not changed.
+- Objective/scope: Sync workbook status, percentage, and notes with the evidence recorded above; confirm that PR #5 remediations on `main` (`78ea80c`) pass the maintained tests.
+- Changes: Edited sheet XML directly (no library rewrite) and set full recalculation on open so the `Tổng quan` summary refreshes. Updated 13 rows, all Đang làm (30–90%); ID 2 is 90% because Bronze still does not preserve original payloads; every other row unchanged at Chưa bắt đầu (0%). IDs 4, 5, 14, 15, 17 and 19–40 have no evidence. Percentages are estimates, not acceptance. A pre-edit backup is in the session scratchpad.
+- Checks actually run on `main` (Docker, synthetic data): `make test` → 46 passed, 9 deselected, 9.30 s; `make test-integration` (PostgreSQL + MinIO) → 9 passed, 6.26 s. Warnings: Airflow `schedule_interval` deprecation, NumPy binary-size. The updated workbook was re-read with openpyxl (values confirmed); it was not opened in Excel/LibreOffice, so summary formulas were not recalculated here.
+- Data scope: Status notes rely on the logged real-data runs (Silver 994,145 observation rows; Gold/DW 120 months). They were not independently reconciled in this entry. Sources are Open-Meteo (ECMWF reanalysis, gridded) and Meteostat (station data), both intermediaries, not Vietnam's national service.
+- Limits: ID 4 (real GeoJSON), 5 (CDS request), 14/15 (ERA5), 17 (Bronze→DW DAG), labels/features, OLAP, Power BI, CART not started. Calendar basis (UTC+7 for `date_key`) still needs team confirmation.
+
+## Task 6/7 decisions recorded — 2026-10-21
+
+- Related work: workbook IDs 6 (Silver contract) and 7 (RainNext24h definition); also touches 10, 12, 22. Documentation and workbook status only; no code, SQL, or data changes.
+- Changes: `docs/data-contract.md` → v0.2 (confirms columns/units/UTC, `pressure_type`, provenance, duplicate handling; station selection and minimum coverage stay open). `docs/rain-label.md` → v0.2 (threshold over `(t, t+24h]`; initially 0.1 mm, changed to 1 mm after the measurement below, Open-Meteo label source for the first experiment, missing hour ⇒ no label, UTC for labels/splits vs UTC+7 for `date_key`). Workbook IDs 6 and 7 set to Đang làm at 90% and 80% with notes.
+- Basis: Decisions were confirmed by the project member working on N1/N2 on 2026-10-21. Sign-off from the third member is not recorded, and the documents say so. These are choices for the first experiment, not proven optimal.
+- Checks: diffs reviewed (2 docs); workbook re-read with openpyxl. No Markdown link check or service run. Label rates at 0.1 mm versus 1 mm were not measured: this machine's MinIO holds only demo objects, so real Silver data was unavailable.
+- Limits: Rain timestamp convention (preceding-hour sum) unverified on a sample; fallback ERA5, station selection, minimum coverage, and recall/false-alarm targets remain open. Both tasks stay below Hoàn thành until the third member confirms and the timestamp check and label-rate count are done.
+
+### Label-rate measurement and threshold change — 2026-10-21
+
+- Related work: workbook ID 7 (and input to ID 22). Measurement only; no label code, MinIO/DW writes, or pipeline changes.
+- Data: real Open-Meteo Archive responses, eight requests (one per canonical location, `hourly=precipitation`, `timezone=UTC`, 2024-01-01 to 2024-12-31), saved only in the session scratchpad. 8,784 hours per location, zero nulls; 8,760 labelled hours per location (windows `(t, t+24h]` requiring 24 valid hours). This is one year and one source; Meteostat was not compared.
+- Result: positive rate at 0.1 mm was 65.4–73.4% (monthly 24–100%); at 1 mm it was 46.2–54.7%. Annual totals 1,980–2,660 mm. Because an always-Yes baseline would already reach about 71% at 0.1 mm, the threshold in `docs/rain-label.md` and the workbook note for ID 7 was changed to 1 mm.
+- Checks/limits: the saved timestamps are hourly UTC, but the preceding-hour versus following-hour rain convention could not be verified from this data and remains open. This machine's MinIO holds only demo objects and the `thuchanh_minio_data` volume is empty, so the logged 10-year Silver/DW data was not available for reconciliation. Third-member sign-off is still not recorded.
+
+- Update 2026-10-21: the user reported that the third team member confirmed the task 6/7 decisions (relayed verbally; no written record in the repository). Remaining: rain timestamp convention check and comparison with the 10-year data.
+
+### Task 6/7 closing checks — 2026-10-21
+
+- Related work: workbook IDs 6 and 7 (input to 10, 11, 22). Documentation, workbook, and read-only measurement only; no code, MinIO, or DW changes.
+- Timestamp convention: the Open-Meteo Historical Weather API documentation states hourly `precipitation` is the "sum of the preceding hour". The `(t, t+24h]` window therefore uses values at t+1h…t+24h. Recorded in `docs/rain-label.md`.
+- Label rates: eight Open-Meteo Archive requests (one per canonical location, `hourly=precipitation`, `timezone=UTC`, 2016-01-01 to 2025-12-31, 5 s between calls), all HTTP 200, about 2.1 MB each, stored only in the session scratchpad. Each location had 87,672 contiguous UTC hours with zero nulls, giving 701,376 hours in total, which matches the logged Open-Meteo Silver count. Labels requiring 24 valid hours: 701,184. At 1 mm the positive rate was 50.5% overall (train 50.9%, validation 2024 49.3%, test 2025 49.0%), yearly means 42.0–56.5%, monthly 25–78%; LCA was highest at 67.7%. At 0.1 mm the rate was 69.5%. This confirms the 1 mm decision. Train labels near 2023-12-31 and validation labels near 2024-12-31 use rain from the next split and must be purged per `docs/rain-label.md`; test 2025 ends at 2025-12-30 23:00 UTC without 2026 data.
+- Station selection/coverage: read `scripts/station_config.py` and grepped the Silver/Gold scripts. All eight canonical locations map 1:1 to a WMO station (superseded the same day: five of those ids were misassigned; see "Station registry correction and RainNext24h label module"); `48806`/`48808` are excluded; coverage is reported by `scripts/quality_checks.py`; no `fillna`/interpolation found. Recorded in `docs/data-contract.md`, with the minimum coverage threshold still open. Earlier statements in this session that "5 of 8 locations have a station" were wrong: 8 are mapped and about 5 returned Meteostat data per the 2026-10-11 log.
+- Finding: registry station coordinates are identical to the canonical point coordinates, so station-to-point distances are not real yet (relevant to workbook ID 11). Not fixed in this turn.
+- Workbook: IDs 6 and 7 set to Đang làm 98%. They stay below Hoàn thành because the third member's confirmation is only relayed verbally. Re-read with openpyxl; not opened in Excel.
+
+## Station registry correction and RainNext24h label module — 2026-10-21
+
+- Related work: workbook IDs 9 (Meteostat), 11 (DimStation), 18 (fact loading), 22 (label generation); `docs/data-contract.md` v0.2, `docs/rain-label.md` v0.2, `docs/NAMING_CONVENTIONS.md` Table 6.
+- Finding: station identities were checked against Meteostat station metadata (`data.meteostat.net/stations/<id>.json`, 10 requests) and NOAA ISD `isd-history.csv` (1 request). Five of the eight Table 6 ids belong to other stations: `48825` is Hà Đông (was PTO), `48826` is Phù Liễn/Hải Phòng (was TNG), `48830` is Lạng Sơn (was HBI), `48838` is Móng Cái (was HPH), `48840` is Thanh Hóa (was NBI). `48816` (TUQ) exists in neither catalogue. Registry coordinates had been copied from the research points. The five stations that returned Meteostat data on 2026-10-11 (`48820`, `48825`, `48826`, `48830`, `48840`) included four misassigned ones. The logged Meteostat Silver/Gold/DW rows for PTO, TNG, HBI, and NBI are therefore observations from other stations.
+- Changes: `scripts/station_config.py` now records verified names, coordinates, and elevations with their source. Canonical mappings: HAN `48820`, HPH `48826`, TNG `48831`, LCA `48803`. Misassigned/unverified ids are status `UNMAPPED_MISASSIGNED`/`UNMAPPED_UNVERIFIED` and are rejected by the existing publication guard. Only `48820` and `48826` are served by Meteostat. Updated Table 6, data-contract station row, and `tests/test_silver_transformations.py` (canonical-mapping test rewritten; new rejection test).
+- Changes: new `scripts/rain_labels.py` (`build_rain_labels`, `assign_splits`). It uses `(t, t+24h]` on a per-location UTC grid, a 1 mm default threshold, requires 24 valid hours (missing is never No), and rejects naive timestamps and duplicates. Splits are by UTC origin, with `boundary_purge` when `target_end >= split_end`, plus `missing_label`/`out_of_scope` reasons. New `tests/test_rain_labels.py` (10 synthetic tests: t, t+1h, t+24h, t+25h, threshold equality, absent/null hours, end of series, per-location independence, both split boundaries, test end).
+- Checks: `.venv/bin/ruff check scripts dags tests` passed; `ruff format --check` passed (21 files). `make test` → 57 passed, 9 deselected, 5.96 s. `make test-integration` → 9 passed, 5.60 s. Real-data run of the label module on the eight Open-Meteo 2016–2025 responses already in the session scratchpad (701,376 hours) took 0.48 s. Results: 701,184 labelled, 700,800 usable, 576 `boundary_purge` (24 h × 8 locations × 3 boundaries); usable positive rate train 50.9%, validation 49.4%, test 49.0%.
+- Not done: Bronze/Silver/Gold/DW were not rerun; the corrected registry affects them only on the next run. The machine holding the 10-year MinIO/DW data must rerun Meteostat Silver with `--overwrite`, rerun `seed_dimensions.py`, and reload Gold/DW. The retraction of the misassigned PTO/TNG/HBI/NBI Meteostat facts was not verified. Labels are not yet exported from Silver/Gold. Historical Bronze objects for the misassigned ids keep their raw station ids, so provenance is preserved.
+- Workbook: notes updated for IDs 9, 11, 18; ID 22 set to Đang làm 40%.
+
+- Update 2026-10-21 (workbook IDs 6 and 7): the user, acting for the team, stated that their confirmation is sufficient approval. Workbook IDs 6 and 7 were set to Hoàn thành at 100%. Items that remain open and are recorded as such: minimum coverage threshold (ID 6) and ERA5 fallback (ID 7). The approval was given verbally in this session; no separate written record from the third member exists in the repository.
+
+## Full local rebuild with the corrected station registry — 2026-10-21
+
+- Related work: workbook IDs 8, 9, 10, 11, 12, 16, 18. Real data, full 2016–2025 scope, run on the N1/N2 machine (Docker Desktop, Compose project `test_dl_weather`). The user asked for the data to be fetched from the source APIs because the earlier 10-year dataset exists only on another machine.
+- Environment fix: the existing `test_dl_weather_postgres_data` volume held a cluster whose first initialization had been interrupted (`airflow` database present but empty, no `weather_dwh`). Ran the project initializer `docker compose exec -T postgres bash /docker-entrypoint-initdb.d/01_init_postgres.sh` (idempotent DDL): created `weather_dwh`, 7 tables, 8 locations, 4 sources. MinIO kept its existing demo objects.
+- Commands (each `docker compose run --rm --no-deps -T --entrypoint python airflow-webserver /opt/airflow/scripts/<script>`; working tree with the corrected `station_config.py`):
+  - `ingest_open_meteo.py --start-year 2016 --end-year 2025`: rc 0, 326 s, 80/80 Bronze files.
+  - `ingest_meteostat.py --start-year 2016 --end-year 2025`: rc 0, 44 s. 15 files (48820 2016–2025; 48826 2021–2025), 25 station-years HTTP 404 (48826 2016–2020, 48831 and 48803 all years), 0 failures.
+  - `transform_open_meteo_to_silver.py ... --overwrite`: rc 0, 24 s, 701,376 rows, 0 missing hours, 0 conflicts.
+  - `transform_meteostat_to_silver.py ... --overwrite`: rc 0, 12 s, 131,060 rows, 436 missing hours, 0 conflicts.
+  - `seed_dimensions.py`: rc 0, 9 s. `dim_date` 4,018 days (20160101–20261231), `dim_time` 24, `dim_station` 11 with verified coordinates.
+  - `load_gold_observations.py --start-year 2016 --end-year 2025`: rc 0, 233 s, 832,436 curated/upserted rows, 0 failures.
+- Read-only SQL reconciliation on `weather_dwh`:
+  - 832,436 rows with 0 duplicates on either the UTC grain or the unique key.
+  - Open-Meteo has 87,672 rows for each of the 8 locations (2016-01-01T00Z → 2025-12-31T23Z).
+  - Meteostat has only HAN/48820 (87,629) and HPH/48826 (43,431, from 2021-01-01T17Z). 43 + 393 missing hours = 436, matching the Silver report.
+  - No Meteostat rows exist for PTO, TNG, HBI, or NBI.
+  - 2024 Open-Meteo rain totals per location in the DW equal the independent API sample downloaded earlier today to 0.1 mm (e.g., HAN 2,660.3 mm).
+  - MinIO non-demo objects: Bronze 95, Silver 1,143, Gold 126.
+- Interpretation: the earlier 994,145-row dataset on the other machine is superseded. Its 292,769 Meteostat rows included stations assigned to the wrong locations. The 161,709-row difference (old Meteostat 292,769 minus new 131,060; Open-Meteo is unchanged at 701,376) is the removed misassigned-station data, partly offset by HPH, which previously had no Meteostat rows. That machine's MinIO/DW still holds the old data until it is rebuilt or the stale Silver objects for 48825/48830/48840 are deleted before reloading.
+- Not verified: Airflow DAG execution (scripts were run directly), Bronze raw-payload preservation (known gap), Power BI/OLAP, and a rerun of the Gold load for idempotence on this machine (earlier tests cover it).
+
+## Post-rebuild verification and Meteostat provenance finding — 2026-10-21
+
+- Related work: workbook IDs 9, 10, 16, 18 and `docs/data-contract.md` (`observation_type`). Verification only; no code changed in this entry.
+- Checks: `ruff check`/`format --check` passed (21 files); `py_compile` passed for the changed scripts; `git diff --check` passed. A Gold/DW rerun of 2024 (`load_gold_observations.py --start-year 2024 --end-year 2024`, rc 0, 27 s, 87,625 rows upserted) left the DW unchanged at 832,436 rows, 832,436 distinct unique keys, and 198,957.7 mm total rain. The rerun is idempotent on real data.
+- Finding (data quality, open): the Meteostat bulk CSVs carry per-variable `<var>_source` columns. Measured on the 15 Bronze files:
+  - 48820/HAN precipitation is null for 2016–2021 and 100% `dwd_mosmix` (DWD MOSMIX model forecast) for 2022–2025. Its temperature is 94.8% `isd_lite`, 5.0% `metar`, 0.2% `dwd_mosmix`.
+  - 48826/HPH is 100% `metno_forecast` (MET Norway model forecast) for every variable in 2021–2025.
+  - So no Meteostat precipitation in the DW is a gauge observation, and HPH Meteostat contains no observations at all.
+- Bug: `transform_meteostat_to_silver.py` looks only for `_source`/`source` columns, so every Meteostat row is labeled `observation_type = "station_reported"`. The DW fact table has no `observation_type` column, so the distinction is also lost downstream.
+- Decision needed (not taken): (a) keep per-variable source columns in Silver/Gold and exclude model-sourced values from "station" analyses, or (b) drop model-sourced Meteostat values at Silver. Either option changes the data contract, the Silver producer, the Gold/DW consumers, and possibly the DDL (migration). The rain label is unaffected because it uses Open-Meteo only.
+
+## Meteostat model-value filter applied to real data — 2026-10-21
+
+- Related work: workbook IDs 9, 10, 16, 18; `docs/data-contract.md` (new "Meteostat model-filled values" row and `observation_type` domain). The user chose option 2: drop model values at Silver.
+- Changes:
+  - `scripts/transform_meteostat_to_silver.py`: new `remove_non_observation_values()` uses an allowlist (`isd_lite`, `metar`, `synop`, `national`), nulls every other source per variable (including untagged values in files that have source columns), and drops rows with no remaining measurement. It records `source_filter` statistics. `observation_type` is now `station_reported` only after filtering, or `unverified_source` for legacy payloads without source columns. With `--overwrite`, stale Silver months for a station-year are removed once its Bronze file was read successfully, so Gold cannot reload them. Summary output adds removed values, dropped rows, and removed stale months.
+  - `tests/test_silver_transformations.py`: the provenance fixture now uses the real per-variable source format. New tests: per-variable model removal and row drop (including an unknown source), an all-model payload yielding no rows, a legacy payload marked unverified, and an overwrite run removing only the month that lost its observations.
+- Checks:
+  - `ruff check`/`format --check` passed.
+  - `make test` → 61 passed, 9 deselected, 6.54 s.
+  - `make test-integration` → 9 passed, 5.66 s.
+- Real-data run (same Compose stack and Bronze as the rebuild):
+  - `transform_meteostat_to_silver.py --start-year 2016 --end-year 2025 --overwrite`: rc 0, 13 s, 87,485 rows kept, 436,502 model values removed, 43,575 rows dropped, 60 stale Silver months removed (all 48826), 0 failures.
+  - `load_gold_observations.py --start-year 2016 --end-year 2025`: rc 0, 788,861 rows upserted, 0 failures. Reported elapsed 3,493 s versus 233 s earlier. The host clock jumped during the run (a later MinIO call failed with `RequestTimeTooSkewed` until the clocks resynchronized), so the machine probably slept. The slowdown is unexplained and was not profiled. Row-by-row retraction deletes are a plausible contributor.
+- Reconciliation (read-only SQL and MinIO listing from inside the Compose network):
+  - DW holds 788,861 rows (701,376 Open-Meteo + 87,485 Meteostat) with 0 unique-key duplicates.
+  - Meteostat now has HAN only (2016-01-01T00Z → 2025-12-31T23Z, 8,721–8,782 rows per year): 0 non-null precipitation, 87,484 non-null temperatures. HPH Meteostat rows were retracted from the DW (43,431 → 0), as were HAN rows whose values were all model-derived (87,629 → 87,485). Open-Meteo is unchanged.
+  - Silver `weather_hourly/` holds 1,080 objects (960 Open-Meteo, 120 Meteostat 48820, 0 for 48826); Gold holds 128 objects.
+  - This also verifies the Gold→DW retraction path on real data.
+- Implications/limits:
+  - No station precipitation is available for any location from Meteostat. Comparing station and model rainfall would require NOAA ISD/GHCN-h or another gauge source (workbook ID 9 "NOAA" remains open).
+  - The DW fact table still has no `observation_type` column; Gold Parquet keeps it.
+  - The allowlist was confirmed against sources seen in this data (`isd_lite`, `metar`); `synop`/`national` are included by name without a sample.
+
+## NOAA ISD precipitation availability check — 2026-10-21
+
+- Related work: workbook ID 9 ("Meteostat / NOAA → Bronze"). Read-only investigation with no code, MinIO, or DW changes. Files were saved only in the session scratchpad.
+- Scope: 2024 only. 14 northern Vietnam NOAA ISD stations active through 2025 (from `isd-history.csv`, latitude ≥ 19.8). Sources: ISD-Lite `noaa-isd-pds.s3.amazonaws.com/isd-lite/data/2024/<usaf>-99999-2024.gz` and full ISD `.../data/2024/<usaf>-99999-2024.gz`; 28 requests in total. The old `ncei.noaa.gov/pub/data/noaa/isd-lite` paths now return HTTP 301 to the S3 bucket.
+- ISD-Lite: no 1-hour precipitation at any station. The 6-hour precipitation field appears only at 06/18 UTC and only on rainy reports (42–209 per station-year), so it is unusable as an hourly or complete series. Temperatures are mostly 3-hourly (about 2,770 reports per year); only the airports 488200 (Nội Bài) and 488251 (Cát Bi) are near-hourly, and both have no precipitation.
+- Full ISD `AA` groups: 24-hour totals reported at 12 UTC (window ending 19:00 Vietnam time) for most synoptic stations. Some days carry conflicting duplicate values (52 days at 488260, 61 at 488310). Station-days with a 24-hour value in 2024, nearest research point, and distance:
+  - 488260 Phù Liễn: 337/366 days, HPH, 7.6 km
+  - 488310 Thái Nguyên: 333/366, TNG, 1.7 km
+  - 488030 Lào Cai: 262/366, LCA, 1.6 km
+  - 488250 Hà Đông: 260/366, HAN, 11.3 km
+  - 488230 Nam Định: 341/366, nearest to NBI at 27.3 km (a different province)
+  - No station within reasonable distance of PTO, TUQ, or HBI.
+- Plausibility versus Open-Meteo, using 24-hour totals ending 12 UTC on matching days and the maximum where duplicates conflict:
+  - Phù Liễn: 2,112 mm vs 2,247 mm, Pearson 0.73, rain ≥ 1 mm day agreement 70.5%
+  - Thái Nguyên: 2,218 mm vs 2,156 mm, Pearson 0.61, agreement 75.3%
+  - Open-Meteo reports many more rainy days (about 175 vs 102–111), consistent with reanalysis drizzle.
+- Conclusion: NOAA ISD provides **daily** gauge rainfall for up to five research points but no hourly rainfall. It can support station-versus-model daily rain comparisons in BI/reports, not the hourly RainNext24h label. Using it requires a contract decision, because the current observation grain is hourly: for example, a separate daily station-rain table with source × station × UTC day ending 12:00, a duplicate-resolution rule, and a coverage report. Other years were not checked.
+
+### NOAA ISD 10-year daily-rain coverage — 2026-10-21
+
+- Scope: full ISD files for 488260 (Phù Liễn/HPH), 488310 (Thái Nguyên/TNG), 488030 (Lào Cai/LCA), 488250 (Hà Đông/HAN), and 488230 (Nam Định/NBI substitute), 2016–2025. 50 requests to `noaa-isd-pds.s3.amazonaws.com/data/<year>/<usaf>-99999-<year>.gz`, all HTTP 200, 5.2 MB, kept in the session scratchpad only. Only `AA` groups with a 24-hour period in reports at 12 UTC were counted.
+- Coverage (share of days with a 24-hour value):
+  - Phù Liễn, Thái Nguyên, Nam Định: 94–99% per year for 2016–2024.
+  - Lào Cai and Hà Đông: 52–79%.
+  - 2025: 44–61% for all five, because the ISD history ends on 2025-08-24.
+  - Total: 14,724 station-days (Lào Cai 2,268; Nam Định 3,402; Hà Đông 2,269; Phù Liễn 3,393; Thái Nguyên 3,392). Mean annual totals were 1,714–1,906 mm.
+- Duplicates: 2,250 station-days carry two different 24-hour values, always from the same FM-12 SYNOP report.
+  - 2,223 differ by ≤ 0.5 mm: the same amount encoded twice (`AA2` rounded to whole mm, `AA3` at 0.1 mm).
+  - 27 differ by more than 0.5 mm, including one `999.1` value.
+  - Proposed rule: within 0.5 mm, keep the 0.1 mm-resolution value; otherwise quarantine; values ≥ 999 are invalid. Under that rule about 14,697 station-days are usable and 27 are quarantined.
+- No code, contract, or DW changes yet. The daily-rain table, its grain (source × station × UTC day ending 12:00), and the duplicate rule still need approval before implementation.
+
+## Business specifications for the next N1/N2 tasks — 2026-10-21
+
+- Related work: workbook IDs 19, 20, 9, 17, 8, 4, 5. Documentation only: new `docs/task-specs-weeks-2-5.md`, plus a source-table row in `docs/business-requirements.md`. No code, SQL, or data changes.
+- Research performed: read the business requirements, warehouse schema, architecture, DDL, and the DW/BI/ETL skills. Web sources consulted: Microsoft Learn (Power BI PostgreSQL connector), NCEI/NESDIS (ISD superseded by GHCNh; no ISD updates beyond 2025-08-24), ECMWF forum (CDS item limits and licence errors), and Resolution 202/2025/QH15 coverage (63 → 34 provinces).
+- Sampled 6 GHCNh files (`by-year/<YYYY>/psv/GHCNh_VMM000<WMO>_<YYYY>.psv`): 2025 for 48803, 48823, 48825, 48826, 48831, and 2024 for 48826. Results: 24-hour precipitation on 358–360 days in 2025, data through 2025-12-31, one value per day, no hourly precipitation. Phù Liễn 2024 total 2,112 mm, identical to ISD. The specification therefore proposes GHCNh instead of ISD for ID 9.
+- Verified versus unverified: four of the province mergers relevant to the research points were confirmed by search results (Phú Thọ + Vĩnh Phúc + Hòa Bình; Tuyên Quang + Hà Giang; Lào Cai + Yên Bái; Thái Nguyên + Bắc Kạn); Hải Dương into Hải Phòng was confirmed by Wikipedia. Ninh Bình + Hà Nam + Nam Định is unconfirmed. GeoJSON candidates, licences, and current CDS limits were not verified. Rainy-day (1 mm) and hot-day (35 °C) thresholds are proposals.
+- Update 2026-10-21 (ID 4): the N1/N2 member decided to use pre-merger (63-province) boundaries, because the study period is almost entirely before 2025-07-01. `docs/task-specs-weeks-2-5.md` §7 now records this decision, the conflict with workbook ID 4/ID 11 and the risk sheet (which ask for post-merger boundaries and old + new names), and the candidate sources (HDX COD-AB earlier version, geoBoundaries, GADM). Licenses were not verified. The workbook was not edited.
+
+## OLAP views (workbook ID 19) — 2026-10-21
+
+- Related work: workbook ID 19; `docs/task-specs-weeks-2-5.md` §2; `docs/warehouse-schema.md` aggregation rules. Thresholds were decided by the N1/N2 member: rainy day ≥ 1.0 mm and hot day ≥ 35.0 °C, both on complete local days.
+- Changes:
+  - New `sql/02_olap_views.sql` (idempotent `CREATE OR REPLACE VIEW`): `vw_obs_hourly`, `vw_obs_daily`, `vw_calendar_month`, `vw_obs_monthly`, `vw_obs_yearly`, `vw_coverage`. Local calendar (UTC+7).
+  - Rules: aggregates stay within one source × location; means roll up from sums and counts; wind direction uses a vector mean excluding calm or missing-direction hours; incomplete days give NULL flags; a month with no complete day gives NULL rainy/hot counts, not 0. Pressure is compared within one source only, because surface and sea-level pressure share a column.
+  - `sql/01_init_postgres.sh` applies the views to new databases and is now executable (mode 100755). `docker-compose.yml` mounts the view file. `Dockerfile` and `.dockerignore` copy it into the test image.
+  - New `tests/test_olap_views.py` (3 integration tests; synthetic March 2023; transaction rolled back). Covered: rain sum and inclusive 1 mm flag, hot flag, vector wind mean near north, incomplete day → NULL flag, missing Meteostat rain → NULL instead of 0, monthly mean from sums/counts, yearly = Σ monthly, and sources kept separate.
+- Pre-existing bug found and fixed: on this macOS Docker Desktop host, the postgres entrypoint tried to execute the non-executable `01_init_postgres.sh` and failed with `/bin/bash: bad interpreter: Permission denied`, which aborts first-time initialization. The original file from `HEAD` reproduced the failure, and `chmod +x` fixed it. This explains the half-initialized volume found earlier today (`airflow` database present, no `weather_dwh`).
+- Checks:
+  - `ruff check`/`format --check` passed (22 files); `bash -n` passed; `docker compose --env-file .env.example config --quiet` passed.
+  - `make test` → 61 passed, 12 deselected.
+  - `make test-integration` → 12 passed.
+  - Fresh throwaway `postgres:16-alpine` container (`--network none`) with the three mounts: initialization finished and created all 6 views.
+  - Live DW: views applied twice without error.
+- Real-data reconciliation (full DW, 788,861 rows):
+  - Row counts: hourly 701,376 + 87,485; daily 29,232 Open-Meteo + 3,654 Meteostat; monthly 968 + 121; yearly 88 + 11. The extra local day/month/year comes from the 2026-01-01 local boundary (7 hours).
+  - The hourly → daily → monthly → yearly chain against the fact table shows 0 difference in rain, row counts, temperature sums, and temperature counts for all 9 source × location series.
+  - Spot check, HAN Open-Meteo July 2024: direct SQL 541.30 mm and 27 rainy days, matching the monthly view.
+  - Coverage 2017–2025: Open-Meteo 100%; Meteostat HAN 99.55–99.97% records, 0% rain.
+  - Wind direction range 0.0–359.9 after fixing a rounding edge case that produced 360.0.
+  - Full-chain query 1.6 s; single views 0.15–0.8 s.
+- Observations: Open-Meteo averages 156–211 rainy days per location-year. Meteostat HAN shows 57 hot days in 2024 versus 23 for Open-Meteo at HAN (station maximum temperatures are higher than the grid).
+- Limits: no Power BI artifact yet (ID 20). Local-year boundary rows (2016 partial, 2026 = 7 hours) need a year filter in BI. Views are plain (not materialized); ID 26 owns tuning.
+
+## Power BI v1 build guide (workbook ID 20) — 2026-10-21
+
+- Related work: workbook ID 20; `docs/task-specs-weeks-2-5.md` §3. Documentation only. Power BI Desktop cannot run on this macOS host, so **no `.pbix` was created and nothing was tested in Power BI**.
+- Changes: new `docs/powerbi-dashboard-v1.md` covering:
+  - two ways to reach the DW from Windows (local rebuild, or LAN connection to port 5434);
+  - Import of 3 dimensions plus `dim_time`, `vw_obs_daily`, `vw_obs_hourly`, and `vw_coverage`;
+  - relationships, date table, and hierarchy;
+  - DAX measures that return BLANK across multiple sources and average location totals instead of summing them;
+  - five pages mapped to slice, roll-up/drill-down, and dice;
+  - a reconciliation table.
+  The specification links to the guide.
+- Reference values: computed by read-only SQL on the live views (for example, HAN Open-Meteo 2024: 2,660.5 mm, 175 rainy days, 23 hot days, mean 24.62 °C; Meteostat HAN 2024: 25.16 °C, 57 hot days, rain BLANK). These are expected values for the future Power BI check, not evidence that the dashboard works.
+- Limits: DAX syntax and behaviour are unverified in Power BI Desktop; Option B requires a firewall change on the host; the `.pbix` storage location is undecided.
+
+## Station daily rainfall from NOAA GHCNh (workbook ID 9) — 2026-10-21
+
+- Related work: workbook ID 9 (NOAA part); `docs/data-contract.md` "Station daily rainfall"; `docs/task-specs-weeks-2-5.md` §4. The N1/N2 member approved: GHCNh instead of ISD; stations 48826→HPH, 48831→TNG, 48803→LCA, 48825 Hà Đông→HAN, 48823 Nam Định→NBI as a substitute; a separate daily table. Pre-merger province scope is unchanged.
+- Changes:
+  - `scripts/station_config.py`: new `GHCNH_RAIN_STATIONS` mapping, kept separate from the Meteostat canonical mapping; 48823 added to the registry.
+  - New `scripts/ingest_ghcnh.py`: raw bytes plus a JSON manifest (URL, retrieval time, size, SHA-256, rows); bounded retries for timeouts/429/5xx with `Retry-After`; 404 recorded; skip only when the stored object matches its manifest size; exit 1 on failure.
+  - New `scripts/transform_ghcnh_to_silver.py`: 24-hour totals at 12:00 UTC; quality codes 0/1/4 accepted; trace kept with `is_trace`; accumulated/deleted/missing/estimated/incomplete codes, out-of-range values, and off-schedule reports rejected and counted; duplicates resolved (identical collapsed, conflicting quarantined); unsupported extremes (≥ 300 mm without sub-daily support ≥ 10%) quarantined; per station-year coverage in the DQ report.
+  - New `scripts/load_station_daily_rain.py`: one transaction per station-year, set-based retraction plus upsert on `(source_key, station_key, rain_day_utc)`.
+  - New `sql/03_station_daily_rain.sql`: `dim_source` row `GHCNh`, `fact_station_daily_rain` with UNIQUE and CHECK constraints and indexes, and `vw_rain_station_vs_model`. The view compares with Open-Meteo over the same `(D-1 12:00, D 12:00]` UTC window and requires 24 model hours.
+  - `sql/01_init_postgres.sh` now applies every numbered `NN_*.sql` migration in order. Compose, `Dockerfile`, and `.dockerignore` include the new SQL file.
+  - New `tests/test_ghcnh.py`: 7 unit and 2 integration tests (rules and window, rejects, unsupported versus supported extremes, separate mapping, raw bytes and manifest, rerun skip, transient retry and permanent failure, missing Bronze with a manifest, DW rerun and retraction, view window alignment).
+  - Docs: data contract, naming conventions (GHCNh keys; ISD marked unused), warehouse schema, specification status.
+- Checks:
+  - `ruff check`/`format --check` passed.
+  - `make test` → 68 passed, 14 deselected.
+  - `make test-integration` → 14 passed.
+  - Migration applied twice without error.
+- Real data, 5 stations × 2016–2025, run on this machine:
+  - Ingest: 50/50 files stored (about 2.5 MB each), 0 not found, 0 failures. The run took 8,095 s, mostly while the host slept (no object written 08:18–09:40 UTC). Later runs used `PYTHONUNBUFFERED=1` in the local (non-repository) runner so progress is visible.
+  - Silver: 50 station-years, 0 failures, 14 s. Coverage was 95.89–99.18% of days in every station-year, versus 44–79% from ISD for Lào Cai and Hà Đông; 0 conflicting duplicates. One unsupported extreme was quarantined: 48823, 2023-10-13, 700.0 mm. Two `999.x` values (Phù Liễn 2019-10-09, 2020-10-18) were rejected as out of range.
+  - DW: 17,866 rows; a 2024 rerun and the post-rule reload both left counts consistent, and the 700 mm day was retracted. 2025 station-year totals equal an independent parse of the same GHCNh files done earlier (for example Thái Nguyên 2,888.2 mm, Phù Liễn 1,525.2 mm). Phù Liễn 2024 = 2,111.5 mm, and ISD 2024 = 2,112 mm.
+  - Comparison view (2016–2025): Pearson correlation of daily totals HAN 0.57, HPH 0.63, LCA 0.49, NBI 0.61, TNG 0.56. Agreement on rainy day (≥ 1 mm) is 60–74%. Open-Meteo has 1.5–2.1× more rainy days than the gauges (for example LCA 2,394 vs 1,138), consistent with reanalysis drizzle. Mean annual gauge totals were 1,741–1,932 mm.
+- Limits: daily resolution only (no hourly gauge rain); the 300 mm / 10% extreme rule rests on one observed failure and should be reviewed by the team; Hà Đông and Nam Định are not co-located with their research points; `observation_type`-style provenance for this table is the `station_role` column; no Power BI page uses the view yet.
+
+## RainNext24h label export to Gold ML (workbook ID 22) — 2026-10-21
+
+- Related work: workbook ID 22; `docs/rain-label.md` v0.2. The N1/N2 member approved: features from Open-Meteo only (GHCNh used later for verification), the dataset as Parquet in Gold ML, and EDA as a notebook. This work belongs to N3's ownership; it was done by the N1/N2 member with the agreement recorded here.
+- Changes: new `scripts/export_rain_labels.py`. It reads Silver Open-Meteo hourly data for the 8 canonical locations and refuses to publish if any location-month object is missing. It applies `build_rain_labels` and `assign_splits` (1 mm, `(t, t+24h]`, 24 valid hours, UTC splits with boundary purge) and writes `gold/ml_labels/rain_next24h_labels_v1.parquet`, which keeps excluded rows with a reason, plus a JSON manifest with scope, counts, and positive rates. New `tests/test_export_rain_labels.py` (2 unit tests: a full synthetic year with exact Yes/No origins around a rain hour and boundary purge; refusal on an incomplete Silver snapshot). Naming conventions and the rain-label document were updated.
+- Checks: `ruff check`/`format --check` passed; `make test` → 70 passed, 14 deselected.
+- Real data: `export_rain_labels.py --start-year 2016 --end-year 2025` took 16 s. Results:
+  - 701,376 rows, 700,800 usable, 576 `boundary_purge` (24 h × 8 locations × 3 boundaries).
+  - train 560,832 rows (2016-01-01T00Z → 2023-12-30T23Z), positive rate 50.89%.
+  - validation 70,080 rows, 49.42%.
+  - test 69,888 rows (through 2025-12-30T23Z), 49.03%.
+  These match the label-module run on independently downloaded API data earlier today.
+- Limits: labels are reanalysis rainfall, not gauge observations. No features yet (ID 23) and no EDA (ID 21).
+
+## RainNext24h EDA notebook (workbook ID 21) — 2026-10-21
+
+- Related work: workbook ID 21 (N3's task, done by the N1/N2 member as agreed); `docs/rain-label.md` leakage rules.
+- Changes:
+  - New `scripts/rain_eda.py`: joins labels with Silver Open-Meteo variables at origin t plus trailing derivations (rain over the past 24 h, 24 h pressure change, dew-point depression), computed per location on a gap-checked grid. It also provides class balance, month × location rates, missingness, target distribution, standardized mean differences, and binned rates; summaries used for feature choice default to the train split.
+  - New `tests/test_rain_eda.py` (4 tests): only past/present hours are used, and changing data after t leaves t unchanged; a gap makes the trailing window missing; split filtering; duplicate rejection.
+  - New `notebooks/eda_rain_next24h.ipynb`, committed with executed outputs.
+  - New `requirements-notebook.in`/`.txt` (88 hashed pins, uv 0.8.22, universal for Python ≥ 3.10).
+  - `Makefile` targets `notebook-setup` and `notebook-run`; `.gitignore` ignores `.venv-*/`; `docs/development.md` notebook section.
+  - Charts follow the validated reference palette (single-series blue, sequential blue heatmap, blue/red diverging for signed SMD). Every chart is accompanied by its table. Charts were rendered and inspected; overlapping labels, a misleading zoomed y-axis on the hourly chart, and gridlines over bars were fixed.
+- Checks:
+  - `ruff check`/`format --check` passed; `make test` → 74 passed, 14 deselected.
+  - `make notebook-setup` succeeded on macOS x86_64 / Python 3.12.4 (72 s).
+  - `make notebook-run` executed all 9 code cells against the real Silver/Gold data with 0 errors.
+- Findings on train 2016–2023 (computed in the notebook):
+  - Yes share is 50.89% train, 49.42% validation, 49.03% test.
+  - Strong seasonality: the location mean is 78.2% in August and 25.6% in December. Lào Cai stays at 53–79% all year.
+  - The origin hour changes the Yes share by under 1 percentage point (50.5–51.3%).
+  - Next-24 h rain: 27.8% exactly zero, median 1.1 mm, q99 55.2 mm.
+  - No missing values at origin apart from the first trailing hours of 2016.
+  - Largest separations (|SMD|): dew point 0.81, past-24 h rain 0.76, humidity 0.75, pressure 0.73 (lower before rain), dew-point depression 0.70, cloud cover 0.66. Wind speed and solar radiation are near 0.
+  - Past-24 h rain bins rise from 17% (< 0.1 mm) to 92% (≥ 50 mm).
+- Limits: reanalysis inputs only; no feature set or model yet (IDs 23, 28). Notebook figures are static (no interactive layer). Validation/test statistics were not used for any choice.
+
+## README and architecture status refresh — 2026-10-21
+
+- Related work: documentation only; no workbook task status change.
+- Objective/scope: bring the summary documents in line with the work logged above (IDs 6, 7, 9, 19, 20, 21, 22 and the 2026-10-21 rebuild).
+- Changes:
+  - `README.md`: rewrote "Trạng thái hiện tại" (was the 2026-10-10 state saying Silver/Gold, DW loader, and OLAP did not exist). Added the two new docs to the document table and the new scripts, SQL files, notebook, and notebook lockfile to the repository tree.
+  - `docs/architecture.md`: component table now reflects the implemented ETL, station sources, OLAP views, ML labels/EDA, and remaining gaps (ERA5, GeoJSON, Bronze manifests ID 8, DAG ID 17, features ID 23, model, PBIX).
+  - `docs/rain-label.md`: status sentence now points to the EDA notebook.
+- Checks: internal Markdown links and code fences in the three files checked with a local script (0 missing, 0 unbalanced). No services, tests, or data operations were run; figures quoted in the README are copied from the dated entries above.
+- Limits: the 2026-10-08 Inventory and Discrepancies tables at the top of this log are kept as a historical snapshot; some rows there (labels, station selection, Silver/Gold ETL, DW loading) were resolved later, as recorded in the dated entries.
+
+## RainNext24h feature dataset (workbook ID 23) — 2026-10-21
+
+- Related work: workbook ID 23 (N3's task, done by the N1/N2 member as agreed); `docs/rain-label.md` v0.2 leakage rules; feature source decision of 2026-10-21 (Open-Meteo only).
+- Objective/scope: leakage-free lag, rolling, pressure-tendency, and hour/month features for every usable RainNext24h label, 8 canonical locations, origins 2016–2025.
+- Changes:
+  - New `scripts/build_rain_features.py`. It reads the ID 22 labels from Gold, refuses labels of another label version, reads Silver Open-Meteo (refusing incomplete snapshots, as in ID 22), and computes 22 features per location on a gap-checked hourly grid. It writes one Parquet file per split to `gold/ml_features/` and a manifest with the ordered features, units, versions, split boundaries, counts, and missing values.
+  - New `tests/test_rain_features.py` (6 tests): exact values at t, with every value after t changed leaving all features unchanged; missing history and a missing hour give NaN, while a lag that skips the gap stays valid; no lag crosses locations; UTC+7 hour/month at a year boundary; only usable labels kept and the target amount is not a feature; mock-MinIO export of split files and manifest.
+  - Docs: `docs/rain-label.md` feature dataset v1 section; `docs/NAMING_CONVENTIONS.md` ML dataset row now matches the implemented keys (the old path pattern `cart_rain_prediction_<split>_<version>` disagreed with its own examples); `README.md`, `docs/architecture.md`.
+  - Workbook ID 23: Đang làm, 90.
+- Checks:
+  - `ruff format`/`ruff check` passed on the new files.
+  - `make test` → 80 passed, 14 deselected. The first run failed one test because the test's expected value was wrong (0.5 mm, not 1.0 mm, over hours 28–30); the code was unchanged.
+- Data (real): `build_rain_features.py --start-year 2016 --end-year 2025` in the Airflow image, 17 s.
+  - 700,800 rows, equal to the usable labels of ID 22: train 560,832 (Yes 50.89%), validation 70,080 (49.42%), test 69,888 (49.03%).
+  - Missing feature values only in the first 24 origin hours of 2016: 192 train rows; validation and test have none.
+  - Objects: train 16.9 MB, validation 2.0 MB, test 2.0 MB, plus `cart_rain_features_v1.json`.
+  - Independent check: 6 random rows (3 train, 3 validation) recomputed from the raw Silver monthly objects matched for `rain_past_6h_mm`, `rain_past_24h_mm`, `pressure_change_3h_hpa`, `humidity_percent_lag6h`, and `hour_local`.
+- Limits: features and labels both come from Open-Meteo reanalysis, so results are retrospective and the features are not proven available in real time. No imputation, encoding, or feature selection yet (ID 28, train only). The feature list was not reviewed by the team. A partial year range (for example only 2024) has no earlier history, so its first 23–24 origins per location miss the long-window features.
+- Next step: ID 28, train and tune CART on train with selection on validation 2024.
+
+## CART training and tuning (workbook ID 28) — 2026-10-21
+
+- Related work: workbook ID 28 (N3's task, done by the N1/N2 member as agreed); `docs/rain-label.md` v0.2. Decisions recorded on 2026-10-21: select by validation F1 of the Rain class; drop rows with missing features; no refit on train + validation.
+- Objective/scope: fit CART on train 2016–2023 and select parameters and the probability threshold on validation 2024. The test split was not read.
+- Changes:
+  - New `scripts/train_cart.py`. It reads the ID 23 manifest plus the train and validation files (`read_split` refuses `test`), drops rows with missing features, and builds a pipeline (unscaled numeric features + one-hot `location_code` → `DecisionTreeClassifier`). It fits a 120-configuration grid in parallel, selects the configuration and threshold, computes baselines, and writes `gold/ml_models/cart_rain_next24h_v1/model.joblib` and `report.json`.
+  - New `tests/test_train_cart.py` (4 tests): undefined metrics are `None`; tie handling for configuration and threshold; the test split is refused and never requested; reproducible training whose saved model reloads and predicts identically.
+  - Docs: `docs/rain-label.md` CART model v1 section; `docs/NAMING_CONVENTIONS.md` `ml_models` row; `README.md`; `docs/architecture.md`. Workbook ID 28: Đang làm, 90.
+- Checks: `ruff format`/`ruff check` passed; `make test` → 84 passed, 14 deselected.
+- Data (real): `train_cart.py` in the Airflow image (scikit-learn 1.5.1, 4 CPUs), 212 s.
+  - Train: 560,640 rows used, 192 dropped. Validation: 70,080 used, 0 dropped.
+  - Best F1 by depth limit: 4 → 0.763, 6 → 0.777, 8 → 0.781, 10 → 0.784, 12 → 0.785. The selection rule (within 0.005 of the best, shallowest wins) chose `max_depth=8`, `min_samples_leaf=50`, `class_weight=balanced`, `ccp_alpha=1e-4`: 88 leaves, a 19 KB artifact.
+  - Threshold 0.40 on validation: TP 28,476, FP 9,378, TN 26,066, FN 6,160; precision 0.752, recall 0.822, F1 0.786, accuracy 0.778. At 0.50: F1 0.781, recall 0.775.
+  - Baseline F1 on validation: persistence 0.753, location × month rate 0.710, always Yes 0.662; always No has recall 0.
+  - Train fit at 0.40: F1 0.793, so the gap to validation is small.
+  - Largest importances: `rain_past_12h_mm` 0.65, `dew_point_c` 0.12, `precipitation_mm` 0.10, `rain_past_24h_mm` 0.06, `pressure_hpa` 0.03.
+  - Validation breakdown (computed after selection, not used for choices):
+    - By location, F1 0.758 (HPH) to 0.812 (TNG).
+    - By season, wet season May–Oct F1 0.860 (recall 0.903); dry season Nov–Apr F1 0.602 (recall 0.624).
+    - Share of Rain cases detected by rain amount: 1–5 mm 72%, 5–20 mm 87%, ≥ 20 mm 94%.
+- Limits:
+  - Validation chose both the configuration and the threshold, so its metrics are optimistic.
+  - Independent evaluation on test 2025 is ID 29.
+  - Inputs and labels are Open-Meteo reanalysis, so the result is retrospective.
+  - The improvement over persistence is moderate (+3.3 F1 points), and dry-season performance is weak.
+  - The feature list, selection rule, and threshold have not been reviewed by the team.
+- Next step: ID 29, evaluate the frozen model and threshold once on test 2025; then ID 30, tree figure and rules.
+
+## CART test 2025 evaluation (workbook ID 29) — 2026-10-21
+
+- Related work: workbook ID 29 (N3's task, done by the N1/N2 member as agreed); `docs/rain-label.md` v0.2. The workbook mentions threshold adjustment together with test; as documented in `rain-label.md`, the threshold (0.40) was chosen on validation in ID 28 and only applied here.
+- Objective/scope: one evaluation of the frozen ID 28 model on test 2025 (all 8 locations), with baselines and breakdowns.
+- Changes:
+  - New `scripts/evaluate_cart_test.py`. It loads the model and `report.json` and checks the feature list against the feature manifest. It verifies that the model reproduces the stored validation confusion matrix before reading test, refuses to run if `test_evaluation.json` exists, and writes `test_evaluation.json` and `test_predictions.parquet` next to the model.
+  - New `tests/test_evaluate_cart_test.py` (3 tests): frozen threshold, metrics recomputable from the saved predictions, refusal of a second run; a swapped model is rejected before the test file is requested; feature-order mismatch is rejected.
+  - `tests/test_train_cart.py` fixture now includes target window columns, as in the real feature files.
+  - Docs: `docs/rain-label.md` test 2025 section; `docs/NAMING_CONVENTIONS.md` model row; `README.md`; `docs/architecture.md`. Workbook ID 29: Đang làm, 90.
+- Checks:
+  - `ruff format`/`ruff check` passed; `make test` → 87 passed, 14 deselected.
+  - Before passing, two runs failed on test-fixture issues: missing target columns, and a swapped depth-1 tree that happened to reproduce the same confusion matrix on the one-split synthetic rule, so the test now uses an always-Rain model.
+  - A third failure was a real bug: integer month keys in the evaluation dict did not survive the JSON round trip; keys are now strings.
+  - None of these runs touched real test data.
+- Data (real): `evaluate_cart_test.py` in the Airflow image, 10 s, run once.
+  - Validation reproduction passed. Coverage: 69,888 of 69,888 test labels.
+  - At threshold 0.40: TP 27,254, FP 8,782, TN 26,840, FN 7,012; precision 0.756, recall 0.795, F1 0.775, accuracy 0.774.
+  - Baseline F1: persistence 0.726, location × month rate 0.682, always Yes 0.658; always No has recall 0.
+  - By location, F1 0.763 (HBI) to 0.785 (TUQ). By season, wet May–Oct F1 0.835 (recall 0.878), dry Nov–Apr F1 0.621 (recall 0.600). January 0.524, June 0.904.
+  - Share of Rain cases detected: 1–5 mm 67%, 5–20 mm 84%, ≥ 20 mm 94%.
+  - Model SHA-256 `1f667b91…94b6` (full value in `rain-label.md`).
+- Limits:
+  - Retrospective result on Open-Meteo reanalysis; labels are reanalysis rain, not gauge rain. A GHCNh station-rain check of predictions is possible later.
+  - Test F1 is 1.1 points below validation. The model beats persistence by 4.9 F1 points on test, but performs poorly in the dry season and on light rain.
+  - Not yet reviewed by the team.
+  - Any new model version must not be evaluated on test 2025 as an independent result.
+- Next step: ID 30, tree figure and rules from this artifact; ID 31, predictions into the DW.
+
+## CART tree figure and rules (workbook ID 30) — 2026-10-21
+
+- Related work: workbook ID 30 (N3's task, done by the N1/N2 member as agreed); `docs/rain-label.md`; the artifact evaluated in ID 29.
+- Objective/scope: draw and explain the tree and extract classification rules from the evaluated model, with real feature names and units. The model was not refitted or changed.
+- Changes:
+  - New `scripts/cart_rules.py`, which:
+    - loads the model, report, and model SHA-256;
+    - merges each root-to-leaf path into one condition per variable, using whole numbers for hour/month and translating one-hot columns into `location = X`, `location ≠ X`, or `location not in {…}`;
+    - builds a leaf rule table with train rows, observed Rain share, model probability, and class at the frozen threshold;
+    - builds a node table for the top levels and the decision path of one row.
+  - New `tests/test_cart_rules.py` (4 tests): condition merging and location/integer wording; leaf rules cover every row and match `predict_proba`, and the learned synthetic rule is recovered with its units; node counts and the yes-branch are verified independently; the decision path length equals the leaf depth.
+  - New `notebooks/cart_tree_rules.ipynb`, committed with executed outputs. Its builder lives outside the repository, like the EDA notebook's. The notebook contains:
+    - a model SHA-256 check against `test_evaluation.json`;
+    - a tree figure of 3 levels in the validated sequential palette, with its node table;
+    - the top 10 Rain and No-rain rules;
+    - a coverage summary;
+    - an importance chart and table;
+    - three test-2025 examples chosen by fixed rules;
+    - key numbers, an interpretation, and all 88 rules.
+  - `Makefile` `notebook-run` accepts `NOTEBOOK=…` (default unchanged), documented in `docs/development.md`.
+  - Docs: `docs/rain-label.md` tree and rules section; `README.md`; `docs/architecture.md`. Workbook ID 30: Đang làm, 90.
+- Checks:
+  - `ruff check`/`format` passed; `make test` → 91 passed, 14 deselected.
+  - The first run failed one test whose expected text was too strict (the learned threshold was 79.92 %, not ≥ 80); the code was unchanged.
+  - `make notebook-run NOTEBOOK=cart_tree_rules.ipynb` → 0 errors, about 9 s. Both figures were rendered and inspected.
+  - The first interpretation draft stated the root branches the wrong way round. It was corrected against the printed node table, and every number in the interpretation was rechecked against cell outputs, including the shallowest split depth of each variable (Lào Cai 5, month 6, `hour_local` 4).
+- Data (real): train 2016–2023, 560,640 rows, for the rule statistics; test 2025 predictions from ID 29 for the three examples only.
+  - Root split: past-12-hour rain ≤ 0.35 mm (26% Rain, 288,873 rows) versus > 0.35 mm (77% Rain, 271,767 rows).
+  - 52 of 88 leaves predict Rain; the 10 largest rules cover 45.6% of train rows; rules have 4–7 merged conditions.
+  - Leaf probability versus observed train share differs by at most 0.009.
+  - Examples: largest-rain TP at Hà Nội (144.6 mm, p 0.97); highest-probability FP at Hà Nội (0.7 mm, p 0.97); largest-rain FN at Ninh Bình (57.9 mm, p 0.39).
+- Limits:
+  - The figure shows 3 of 8 levels.
+  - Importance and rules describe correlations in reanalysis data, not causes.
+  - Surface pressure partly encodes elevation/location.
+  - The examples are illustrations, not a full error analysis (ID 36).
+  - Not yet reviewed by the team.
+- Next step: ID 31, load predictions and `dim_model` into the DW.
+
+## Correction to the ID 30 error interpretation — 2026-10-21
+
+- Related work: workbook ID 30; follow-up to the entry above, at the user's request to check the "missed rain" explanation.
+- Problem found:
+  - The first notebook interpretation (and the report to the user) generalized from one example. It called "rain without warning" the model's main weakness, based on the largest-rain test miss.
+  - That example was selected for its size, so it is not typical. Its hourly data also contradict the wording: rain began one hour after *t*, after 0.1 mm of drizzle, under a fully overcast sky with a northerly wind and pressure 6.9 hPa higher than a day earlier.
+  - The verbal report also quoted 89% humidity at *t*; that value was six hours earlier, and humidity was 76% at *t*.
+  - Separately, `docs/rain-label.md` said wind direction was excluded from features v1 because the EDA showed no separation, but the EDA never assessed wind direction.
+- Changes:
+  - `scripts/cart_rules.py`: `hours_to_first_rain` (first rainy hour in the target window, per location on a gap-checked grid) and `missed_rain_profile`.
+  - `tests/test_cart_rules.py`: +2 tests (onset with a gap and no-rain cases; profile counts).
+  - `notebooks/cart_tree_rules.ipynb`:
+    - adds a typical-miss example (probability 0.30–0.40, under 5 mm, closest to the median miss: Lào Cai, 3.0 mm, p 0.36);
+    - adds the hourly Silver context of the extreme miss;
+    - adds a §5 error profile on validation 2024 with an onset recall chart;
+    - corrects the interpretation.
+  - `docs/rain-label.md`: error profile; wind-direction statement corrected.
+- Checks:
+  - `ruff` passed; `make test` → 93 passed, 14 deselected.
+  - `make notebook-run NOTEBOOK=cart_tree_rules.ipynb` → 0 errors after one fix (an object-dtype `round` error in the new context cell).
+  - The new chart was inspected. The notebook text was checked against the printed hourly table.
+- Data (real, validation 2024; describes errors only, no model or threshold change):
+  - Missed: 6,160 of 34,636 Rain cases (17.8%); 64.2% of misses under 5 mm; 55.3% with probability 0.30–0.40; 36.1% after a dry 24 h.
+  - Recall after a dry 24 h: 17.0% overall, 2.6% in the dry season, 31.7% in the wet season. Recall after a wet 24 h: 87.7%.
+  - Recall by onset: 1–3 h 91%, 4–6 h 71%, 7–12 h 66%, 13–18 h 61%, 19–24 h 45%.
+  - For reference, on validation a threshold of 0.35 gives recall 0.901, F1 0.784, and 4,423 more false alarms than 0.40. This trade-off is for ID 36; v1 keeps 0.40.
+- Limits: improvement options are recorded but not done:
+  - feature v2 with wind direction, humidity/cloud trends, and neighbouring-location rain, selected on validation only;
+  - a threshold comparison (ID 36);
+  - numerical weather prediction inputs (out of scope).
+  Any v2 measured on test 2025 is no longer an independent result.
+
+## Predictions and dim_model in the DW (workbook ID 31) — 2026-10-21/22
+
+- Related work: workbook ID 31 (N3 with N2 support; done by the N1/N2 member as agreed); `docs/warehouse-schema.md`; `docs/rain-label.md`. Decisions of 2026-10-21: load only test 2025 predictions (out-of-sample for the frozen model); compute actual rain in a view from the observation fact instead of storing it.
+- Changes:
+  - New migration `sql/04_predictions.sql` (idempotent):
+    - `dim_model`: versions, label and feature sources, both thresholds, horizon, training window, hyperparameters as JSONB, artifact URI and SHA-256, validation and test metrics.
+    - New columns in `fact_weather_prediction`: `model_key`, `origin_utc`, target window, `horizon_hours`, `probability_threshold`, `evaluation_split`. A guard refuses to migrate legacy rows without these values. Legacy columns are kept and filled.
+    - Constraints: unique key `(model_key, location_key, origin_utc)`; checks on window, probability, and split.
+    - Indexes on the prediction foreign keys and origin, and `idx_fwo_location_source_ts` on the observation fact.
+    - View `vw_prediction_vs_actual`: actual rain from the label source over `(target_start, target_end]`; actual and outcome are NULL unless all 24 hours exist.
+  - New `scripts/load_predictions.py`:
+    - upserts `dim_model`;
+    - checks model version, threshold, class consistency, duplicates, locations, and window length;
+    - derives Vietnam-local date/time keys;
+    - replaces the (model, split) scope in one transaction (retract and upsert).
+  - New `tests/test_load_predictions.py`:
+    - 7 unit cases: local keys across a day boundary, 4 rejection cases, model/evaluation mismatch;
+    - 3 integration tests, rolled back: migration applied twice; load, rerun and retraction; view window boundaries (rain stamped at the origin excluded, at the window end included), a NULL outcome for an incomplete window, and unique and window constraints.
+  - `Dockerfile`, `.dockerignore`, `docker-compose.yml` include the migration. Docs: `docs/warehouse-schema.md` (table rows, resolved prediction grain and model gaps), `README.md`, `docs/architecture.md`. Workbook ID 31: Đang làm, 90.
+- Checks:
+  - `ruff` passed.
+  - `make test` → 99 passed, 17 deselected.
+  - `make test-integration` → 17 passed.
+- Data (real, local DW):
+  - `04_predictions.sql` applied twice to `weather_dwh` without error.
+  - `load_predictions.py` loaded 69,888 rows in 23 s; a rerun took 16 s and gave the same `model_key` with 0 retracted.
+  - Prediction rows: 69,888 = 69,888 unique keys, origins 2025-01-01T00Z to 2025-12-30T23Z.
+  - `dim_model`: 1 row; SHA-256 prefix `1f667b913657`; `test_f1` 0.7753.
+  - The view returned outcomes for all rows (0 unknown) in about 1.4 s.
+- **Finding: label bug in ID 22.**
+  - The view's confusion matrix (TP 27,467 / FP 8,569 / TN 26,617 / FN 7,235) did not match ID 29 (TP 27,254 / FP 8,782 / TN 26,840 / FN 7,012).
+  - All 436 differing rows have a 24-hour total of exactly 1.0 mm. `scripts/rain_labels.py` sums floats, which gives values such as 0.99999999999999, so it labels them No. PostgreSQL sums NUMERIC exactly and labels them Yes, which follows the contract (≥ 1 mm). Otherwise the two sums differ by at most 3e-14 mm.
+  - Across all usable labels, 5,147 (0.734%) are wrong in this direction: train 4,237, validation 474, test 436. No error occurs in the opposite direction.
+  - Corrected Yes rates: train 51.64% (reported 50.89%), validation 50.10% (49.42%), test 49.65% (49.03%).
+  - With corrected test labels and the same frozen model and threshold: precision 0.762, recall 0.792, F1 0.777 (reported 0.756 / 0.795 / 0.775).
+  - The earlier "independent" label check used the same function, which is why it did not catch the bug.
+- Limits: only test predictions are loaded; there is no scoring DAG (ID 32) and no Power BI page (ID 33). Labels, features, EDA rates, model training, the ID 29 evaluation, and the figures quoted in docs still carry the label bug until the fix agreed on 2026-10-22 (option A: fix labels, rebuild labels/features v2, re-score the frozen v1 on corrected test labels, keep v1 unchanged).
+
+## Label float-sum fix and corrected re-score (IDs 22, 23, 21, 29, 30, 31) — 2026-10-22
+
+- Related work: the label bug found by the ID 31 reconciliation; option A agreed on 2026-10-22: fix labels, rebuild labels/features v2, re-score the frozen v1 on corrected test labels, keep model v1 unchanged.
+- Cause: `build_rain_labels` used float rolling sums. For long series, windows whose true total is exactly 1.0 mm could come out as 0.99999999999999 and were labelled No. The same applied to trailing rain features and the EDA rain sums.
+- Changes:
+  - `scripts/rain_labels.py`: `RAIN_SUM_DECIMALS = 3` and `round_rain`; window sums are rounded before the threshold and storage; `LABEL_VERSION = "rain_next24h_v0.2.1"` (definition unchanged).
+  - `scripts/build_rain_features.py`, `scripts/rain_eda.py`: trailing rain sums use `round_rain`.
+  - Default dataset versions: labels v2 and features v2. The v1 objects are kept because model v1 was trained on them.
+  - New `scripts/rescore_cart_corrected_labels.py`: requires the frozen model to reproduce the stored test probabilities (within 1e-12) and classes exactly on the v2 features, then writes `test_evaluation_corrected_labels.json` once. It also records validation metrics on corrected labels; nothing is reselected.
+  - `scripts/load_predictions.py`: `dim_model` test metrics come from the corrected re-score when it exists.
+  - Tests:
+    - Regression test with a real 28-hour Hà Nội 2025 slice. It was confirmed to fail on the v0.2 code (0.9999999999999999, No) and pass on v0.2.1 (1.0, Rain). A first attempt with ten 0.1 mm hours did not reproduce the bug and was replaced.
+    - A feature rounding test.
+    - 2 re-score tests: corrected metrics with unchanged predictions and a single run; refusal when inputs change or labels are old.
+  - Notebooks `eda_rain_next24h.ipynb` and `cart_tree_rules.ipynb` were re-executed on labels/features v2. The tree notebook's hard-coded figures were updated after rechecking the outputs. The typical-miss example printed probability 0.40 because of 2-decimal rounding; it now prints 3 decimals (0.397).
+  - Docs: `docs/rain-label.md` (implementation fix, corrected rates and test table, corrected validation figures, profile), `docs/NAMING_CONVENTIONS.md`, `README.md`. Workbook IDs 21, 22, 23, 28, 29, 30, 31 notes updated.
+- Checks:
+  - `ruff` passed; `make test` → 103 passed, 17 deselected.
+  - Both notebooks ran with 0 errors.
+- Data (real):
+  - Labels v2: 701,376 rows, 700,800 usable, 576 purged. Yes rate: train 51.64%, validation 50.10%, test 49.65%.
+  - Features v2: 700,800 rows; missing values only in the first 192 train rows.
+  - Re-score: 436 test labels changed; predictions are identical. Precision 0.762, recall 0.792, F1 0.777, accuracy 0.774 (TP 27,467 / FP 8,569 / TN 26,617 / FN 7,235). This equals the DW view `vw_prediction_vs_actual` exactly.
+  - Corrected validation at 0.40: precision 0.760, recall 0.819, F1 0.789.
+  - Corrected test baselines: persistence F1 0.729, location × month 0.684, always Yes 0.664.
+  - `load_predictions.py` rerun: 69,888 upserted, 0 retracted; `dim_model` test_f1 0.7766. `validation_f1` stays 0.7857, the value from the report on v0.2 labels.
+  - EDA on v2: August 78.5% and December 26.3% Yes; hourly range 51.3–52.0%; top separations unchanged (dew point, past-24-hour rain, humidity).
+  - Tree notebook profile on corrected validation: 18.1% of Rain missed; 64.8% of misses under 5 mm; 54.8% at probability 0.30–0.40; recall after a dry 24 h 16.6% (dry season 2.5%).
+- Limits:
+  - Model v1 was selected and fitted on v0.2 labels (0.73% wrong, all exact-1.0 mm windows). It was not retrained, because a retrained model could not claim an independent test 2025 result. A future model should train on labels/features v2.
+  - The earlier progress entries keep the v0.2 figures as they were measured.
