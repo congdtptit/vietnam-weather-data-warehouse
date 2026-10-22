@@ -806,3 +806,73 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
   - a threshold comparison (ID 36);
   - numerical weather prediction inputs (out of scope).
   Any v2 measured on test 2025 is no longer an independent result.
+
+## Predictions and dim_model in the DW (workbook ID 31) — 2026-10-21/22
+
+- Related work: workbook ID 31 (N3 with N2 support; done by the N1/N2 member as agreed); `docs/warehouse-schema.md`; `docs/rain-label.md`. Decisions of 2026-10-21: load only test 2025 predictions (out-of-sample for the frozen model); compute actual rain in a view from the observation fact instead of storing it.
+- Changes:
+  - New migration `sql/04_predictions.sql` (idempotent):
+    - `dim_model`: versions, label and feature sources, both thresholds, horizon, training window, hyperparameters as JSONB, artifact URI and SHA-256, validation and test metrics.
+    - New columns in `fact_weather_prediction`: `model_key`, `origin_utc`, target window, `horizon_hours`, `probability_threshold`, `evaluation_split`. A guard refuses to migrate legacy rows without these values. Legacy columns are kept and filled.
+    - Constraints: unique key `(model_key, location_key, origin_utc)`; checks on window, probability, and split.
+    - Indexes on the prediction foreign keys and origin, and `idx_fwo_location_source_ts` on the observation fact.
+    - View `vw_prediction_vs_actual`: actual rain from the label source over `(target_start, target_end]`; actual and outcome are NULL unless all 24 hours exist.
+  - New `scripts/load_predictions.py`:
+    - upserts `dim_model`;
+    - checks model version, threshold, class consistency, duplicates, locations, and window length;
+    - derives Vietnam-local date/time keys;
+    - replaces the (model, split) scope in one transaction (retract and upsert).
+  - New `tests/test_load_predictions.py`:
+    - 7 unit cases: local keys across a day boundary, 4 rejection cases, model/evaluation mismatch;
+    - 3 integration tests, rolled back: migration applied twice; load, rerun and retraction; view window boundaries (rain stamped at the origin excluded, at the window end included), a NULL outcome for an incomplete window, and unique and window constraints.
+  - `Dockerfile`, `.dockerignore`, `docker-compose.yml` include the migration. Docs: `docs/warehouse-schema.md` (table rows, resolved prediction grain and model gaps), `README.md`, `docs/architecture.md`. Workbook ID 31: Đang làm, 90.
+- Checks:
+  - `ruff` passed.
+  - `make test` → 99 passed, 17 deselected.
+  - `make test-integration` → 17 passed.
+- Data (real, local DW):
+  - `04_predictions.sql` applied twice to `weather_dwh` without error.
+  - `load_predictions.py` loaded 69,888 rows in 23 s; a rerun took 16 s and gave the same `model_key` with 0 retracted.
+  - Prediction rows: 69,888 = 69,888 unique keys, origins 2025-01-01T00Z to 2025-12-30T23Z.
+  - `dim_model`: 1 row; SHA-256 prefix `1f667b913657`; `test_f1` 0.7753.
+  - The view returned outcomes for all rows (0 unknown) in about 1.4 s.
+- **Finding: label bug in ID 22.**
+  - The view's confusion matrix (TP 27,467 / FP 8,569 / TN 26,617 / FN 7,235) did not match ID 29 (TP 27,254 / FP 8,782 / TN 26,840 / FN 7,012).
+  - All 436 differing rows have a 24-hour total of exactly 1.0 mm. `scripts/rain_labels.py` sums floats, which gives values such as 0.99999999999999, so it labels them No. PostgreSQL sums NUMERIC exactly and labels them Yes, which follows the contract (≥ 1 mm). Otherwise the two sums differ by at most 3e-14 mm.
+  - Across all usable labels, 5,147 (0.734%) are wrong in this direction: train 4,237, validation 474, test 436. No error occurs in the opposite direction.
+  - Corrected Yes rates: train 51.64% (reported 50.89%), validation 50.10% (49.42%), test 49.65% (49.03%).
+  - With corrected test labels and the same frozen model and threshold: precision 0.762, recall 0.792, F1 0.777 (reported 0.756 / 0.795 / 0.775).
+  - The earlier "independent" label check used the same function, which is why it did not catch the bug.
+- Limits: only test predictions are loaded; there is no scoring DAG (ID 32) and no Power BI page (ID 33). Labels, features, EDA rates, model training, the ID 29 evaluation, and the figures quoted in docs still carry the label bug until the fix agreed on 2026-10-22 (option A: fix labels, rebuild labels/features v2, re-score the frozen v1 on corrected test labels, keep v1 unchanged).
+
+## Label float-sum fix and corrected re-score (IDs 22, 23, 21, 29, 30, 31) — 2026-10-22
+
+- Related work: the label bug found by the ID 31 reconciliation; option A agreed on 2026-10-22: fix labels, rebuild labels/features v2, re-score the frozen v1 on corrected test labels, keep model v1 unchanged.
+- Cause: `build_rain_labels` used float rolling sums. For long series, windows whose true total is exactly 1.0 mm could come out as 0.99999999999999 and were labelled No. The same applied to trailing rain features and the EDA rain sums.
+- Changes:
+  - `scripts/rain_labels.py`: `RAIN_SUM_DECIMALS = 3` and `round_rain`; window sums are rounded before the threshold and storage; `LABEL_VERSION = "rain_next24h_v0.2.1"` (definition unchanged).
+  - `scripts/build_rain_features.py`, `scripts/rain_eda.py`: trailing rain sums use `round_rain`.
+  - Default dataset versions: labels v2 and features v2. The v1 objects are kept because model v1 was trained on them.
+  - New `scripts/rescore_cart_corrected_labels.py`: requires the frozen model to reproduce the stored test probabilities (within 1e-12) and classes exactly on the v2 features, then writes `test_evaluation_corrected_labels.json` once. It also records validation metrics on corrected labels; nothing is reselected.
+  - `scripts/load_predictions.py`: `dim_model` test metrics come from the corrected re-score when it exists.
+  - Tests:
+    - Regression test with a real 28-hour Hà Nội 2025 slice. It was confirmed to fail on the v0.2 code (0.9999999999999999, No) and pass on v0.2.1 (1.0, Rain). A first attempt with ten 0.1 mm hours did not reproduce the bug and was replaced.
+    - A feature rounding test.
+    - 2 re-score tests: corrected metrics with unchanged predictions and a single run; refusal when inputs change or labels are old.
+  - Notebooks `eda_rain_next24h.ipynb` and `cart_tree_rules.ipynb` were re-executed on labels/features v2. The tree notebook's hard-coded figures were updated after rechecking the outputs. The typical-miss example printed probability 0.40 because of 2-decimal rounding; it now prints 3 decimals (0.397).
+  - Docs: `docs/rain-label.md` (implementation fix, corrected rates and test table, corrected validation figures, profile), `docs/NAMING_CONVENTIONS.md`, `README.md`. Workbook IDs 21, 22, 23, 28, 29, 30, 31 notes updated.
+- Checks:
+  - `ruff` passed; `make test` → 103 passed, 17 deselected.
+  - Both notebooks ran with 0 errors.
+- Data (real):
+  - Labels v2: 701,376 rows, 700,800 usable, 576 purged. Yes rate: train 51.64%, validation 50.10%, test 49.65%.
+  - Features v2: 700,800 rows; missing values only in the first 192 train rows.
+  - Re-score: 436 test labels changed; predictions are identical. Precision 0.762, recall 0.792, F1 0.777, accuracy 0.774 (TP 27,467 / FP 8,569 / TN 26,617 / FN 7,235). This equals the DW view `vw_prediction_vs_actual` exactly.
+  - Corrected validation at 0.40: precision 0.760, recall 0.819, F1 0.789.
+  - Corrected test baselines: persistence F1 0.729, location × month 0.684, always Yes 0.664.
+  - `load_predictions.py` rerun: 69,888 upserted, 0 retracted; `dim_model` test_f1 0.7766. `validation_f1` stays 0.7857, the value from the report on v0.2 labels.
+  - EDA on v2: August 78.5% and December 26.3% Yes; hourly range 51.3–52.0%; top separations unchanged (dew point, past-24-hour rain, humidity).
+  - Tree notebook profile on corrected validation: 18.1% of Rain missed; 64.8% of misses under 5 mm; 54.8% at probability 0.30–0.40; recall after a dry 24 h 16.6% (dry season 2.5%).
+- Limits:
+  - Model v1 was selected and fitted on v0.2 labels (0.73% wrong, all exact-1.0 mm windows). It was not retrained, because a retrained model could not claim an independent test 2025 result. A future model should train on labels/features v2.
+  - The earlier progress entries keep the v0.2 figures as they were measured.

@@ -161,9 +161,9 @@ The pattern above covers combined-source files or samples, retaining `source_nam
 | **Dim Location** | `dim_location/dim_location.parquet` | `gold/dim_location/dim_location.parquet` |
 | **Dim Source** | `dim_source/dim_source.parquet` | `gold/dim_source/dim_source.parquet` |
 | **Dim Station** | `dim_station/dim_station.parquet` | `gold/dim_station/dim_station.parquet` |
-| **ML labels (implemented)** | `ml_labels/rain_next24h_labels_<version>.parquet` + `.json` manifest | `gold/ml_labels/rain_next24h_labels_v1.parquet` |
-| **ML Dataset (CART, implemented)** | `ml_features/cart_rain_<split tag>_<version>.parquet` (split tags `train_2016_2023`, `val_2024`, `test_2025`) + `ml_features/cart_rain_features_<version>.json` manifest | `gold/ml_features/cart_rain_train_2016_2023_v1.parquet`<br>`gold/ml_features/cart_rain_val_2024_v1.parquet`<br>`gold/ml_features/cart_rain_test_2025_v1.parquet` |
-| **CART model (implemented)** | `ml_models/cart_rain_next24h_<version>/model.joblib` + `report.json`; after the one-time test evaluation also `test_evaluation.json` + `test_predictions.parquet` | `gold/ml_models/cart_rain_next24h_v1/model.joblib` |
+| **ML labels (implemented)** | `ml_labels/rain_next24h_labels_<version>.parquet` + `.json` manifest | `gold/ml_labels/rain_next24h_labels_v2.parquet` (current, labels `rain_next24h_v0.2.1`); `_v1` kept for model v1 |
+| **ML Dataset (CART, implemented)** | `ml_features/cart_rain_<split tag>_<version>.parquet` (split tags `train_2016_2023`, `val_2024`, `test_2025`) + `ml_features/cart_rain_features_<version>.json` manifest | `gold/ml_features/cart_rain_train_2016_2023_v2.parquet`<br>`gold/ml_features/cart_rain_val_2024_v2.parquet`<br>`gold/ml_features/cart_rain_test_2025_v2.parquet` (current; `_v1` kept for model v1) |
+| **CART model (implemented)** | `ml_models/cart_rain_next24h_<version>/model.joblib` + `report.json`; after the one-time test evaluation also `test_evaluation.json` + `test_predictions.parquet`, and `test_evaluation_corrected_labels.json` after the 2026-10-22 label fix | `gold/ml_models/cart_rain_next24h_v1/model.joblib` |
 | **Model predictions** | `predictions/year=YYYY/month=MM/rain_predictions_cart_<YYYYMMDD>.parquet` | `gold/predictions/year=2024/month=05/rain_predictions_cart_20240501.parquet` |
 
 ---

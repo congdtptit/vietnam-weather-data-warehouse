@@ -27,7 +27,7 @@ from rain_labels import DEFAULT_THRESHOLD_MM, LABEL_VERSION, assign_splits, buil
 from station_config import CANONICAL_LOCATIONS
 
 LABEL_SOURCE = "Open-Meteo"
-DATASET_VERSION = "v1"
+DATASET_VERSION = "v2"  # v2: labels rain_next24h_v0.2.1 (float-sum fix); v1 kept for model v1
 
 
 def labels_keys(version: str = DATASET_VERSION) -> tuple[str, str]:

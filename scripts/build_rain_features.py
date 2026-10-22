@@ -36,9 +36,9 @@ from export_rain_labels import DATASET_VERSION as LABEL_DATASET_VERSION
 from export_rain_labels import LABEL_SOURCE, labels_keys, read_open_meteo_silver
 from load_gold_observations import BUCKET_GOLD, get_minio_client
 from minio import Minio
-from rain_labels import LABEL_VERSION, SPLITS
+from rain_labels import LABEL_VERSION, SPLITS, round_rain
 
-FEATURE_VERSION = "v1"
+FEATURE_VERSION = "v2"  # v2: labels v0.2.1 and rounded rain sums; v1 kept for model v1
 FEATURE_SOURCE = "Open-Meteo"
 LOCAL_OFFSET = pd.Timedelta(hours=7)  # Vietnam, UTC+7, no daylight saving
 
@@ -133,7 +133,9 @@ def compute_features(hourly: pd.DataFrame) -> pd.DataFrame:
 
         # Trailing windows (t - n + 1h .. t]; incomplete windows stay NaN
         for n in (3, 6, 12, 24):
-            f[f"rain_past_{n}h_mm"] = g["precipitation_mm"].rolling(n, min_periods=n).sum()
+            f[f"rain_past_{n}h_mm"] = round_rain(
+                g["precipitation_mm"].rolling(n, min_periods=n).sum()
+            )
         f["humidity_mean_6h_percent"] = g["humidity_percent"].rolling(6, min_periods=6).mean()
         f["cloud_cover_mean_6h_percent"] = g["cloud_cover_percent"].rolling(6, min_periods=6).mean()
 

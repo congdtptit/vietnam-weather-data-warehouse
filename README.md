@@ -15,7 +15,7 @@ Cập nhật ngày **2026-10-21**. Bằng chứng chi tiết (lệnh đã chạy
 - ETL bằng script: Open-Meteo và Meteostat → Bronze → Silver → Gold → `fact_weather_observation`. Meteostat chỉ giữ giá trị quan trắc (loại giá trị mô hình dự báo). DAG Airflow mới có cho bước Open-Meteo → Bronze; DAG Bronze → DW (task 17) chưa có.
 - Mưa ngày tại trạm từ NOAA GHCNh (5 trạm) → bảng riêng `fact_station_daily_rain`, kèm view so sánh với Open-Meteo.
 - View OLAP giờ/ngày/tháng/năm và độ phủ (`sql/02_olap_views.sql`); hướng dẫn dựng Power BI v1 (`docs/powerbi-dashboard-v1.md`). File PBIX chưa có.
-- Nhãn RainNext24h (ngưỡng 1 mm, chia train/validation/test theo năm UTC, purge biên) xuất ra Gold ML; notebook EDA `notebooks/eda_rain_next24h.ipynb` với môi trường riêng (`make notebook-setup`); bộ 22 đặc trưng không rò rỉ dữ liệu tương lai trong `gold/ml_features/` (3 file theo tập train/validation/test); mô hình CART v1 đã train, chọn tham số trên validation 2024 và đánh giá một lần trên test 2025 (F1 0,775, Recall 0,795; mốc dự báo theo hiện trạng F1 0,726); hình cây và luật trong `notebooks/cart_tree_rules.ipynb`.
+- Nhãn RainNext24h (ngưỡng 1 mm, chia train/validation/test theo năm UTC, purge biên) xuất ra Gold ML; notebook EDA `notebooks/eda_rain_next24h.ipynb` với môi trường riêng (`make notebook-setup`); bộ 22 đặc trưng không rò rỉ dữ liệu tương lai trong `gold/ml_features/` (3 file theo tập train/validation/test); mô hình CART v1 đã train, chọn tham số trên validation 2024 và đánh giá một lần trên test 2025 (F1 0,777, Recall 0,792 với nhãn đã sửa lỗi làm tròn ngày 22/10; mốc dự báo theo hiện trạng F1 0,729); hình cây và luật trong `notebooks/cart_tree_rules.ipynb`; dự đoán test 2025 đã nạp vào `fact_weather_prediction` cùng `dim_model` và view `vw_prediction_vs_actual`.
 - Ruff, pre-commit, Makefile, pytest và cấu hình GitHub Actions; tài liệu nghiệp vụ và đặc tả task tuần 2–5.
 
 Dữ liệu thực 2016–2025 đã được dựng lại trên một máy cục bộ ngày 2026-10-21: DW có 788.861 dòng quan sát giờ (Open-Meteo 8 vị trí; Meteostat chỉ Hà Nội và không có mưa), 17.866 dòng mưa ngày GHCNh, 700.800 nhãn dùng được. Lần kiểm tra gần nhất: `make test` 74 test đạt, `make test-integration` 14 test đạt.
@@ -172,12 +172,14 @@ Test_DL_weather/
 │   ├── transform_*_to_silver.py   # Open-Meteo, Meteostat, GHCNh → Silver
 │   ├── load_gold_observations.py, load_station_daily_rain.py
 │   ├── quality_checks.py
-│   └── rain_labels.py, export_rain_labels.py, rain_eda.py, build_rain_features.py, train_cart.py, evaluate_cart_test.py, cart_rules.py
+│   ├── rain_labels.py, export_rain_labels.py, rain_eda.py, build_rain_features.py, train_cart.py, evaluate_cart_test.py, rescore_cart_corrected_labels.py, cart_rules.py
+│   └── load_predictions.py        # Dự đoán → DW
 ├── sql/                           # Khởi tạo DW và hướng dẫn SQL
 │   ├── 01_init_postgres.sh
 │   ├── init_dwh_schema.sql
 │   ├── 02_olap_views.sql
-│   └── 03_station_daily_rain.sql
+│   ├── 03_station_daily_rain.sql
+│   └── 04_predictions.sql
 ├── notebooks/                     # Notebook EDA, cây và luật CART
 ├── tests/                         # Test offline/integration và fixture
 ├── plugins/                       # Thư mục plugin Airflow
