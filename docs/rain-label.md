@@ -1,6 +1,6 @@
 # RainNext24h and Evaluation Methodology
 
-Version v0.2, 2026-10-21 (label decisions confirmed by the project member working on N1/N2 on 2026-10-21; that member accepted their confirmation as team approval). Original draft v0.1: 2026-10-08. The proposal requires CART classification of rain/no-rain within the next 24 hours. This document records established decisions and items requiring team agreement. Label generation and split purging are implemented in `scripts/rain_labels.py` (tests: `tests/test_rain_labels.py`) and exported to Gold ML by `scripts/export_rain_labels.py` (`gold/ml_labels/rain_next24h_labels_v1.parquet` with a JSON manifest); no feature, model, or DW prediction implementation exists yet.
+Version v0.2, 2026-10-21 (label decisions confirmed by the project member working on N1/N2 on 2026-10-21; that member accepted their confirmation as team approval). Original draft v0.1: 2026-10-08. The proposal requires CART classification of rain/no-rain within the next 24 hours. This document records established decisions and items requiring team agreement. Label generation and split purging are implemented in `scripts/rain_labels.py` (tests: `tests/test_rain_labels.py`) and exported to Gold ML by `scripts/export_rain_labels.py` (`gold/ml_labels/rain_next24h_labels_v1.parquet` with a JSON manifest). Exploratory analysis of the train split is in `notebooks/eda_rain_next24h.ipynb` (helpers: `scripts/rain_eda.py`). The feature dataset v1 is built by `scripts/build_rain_features.py` (see below); no model or DW prediction implementation exists yet.
 
 ## Decisions and status
 
@@ -34,6 +34,21 @@ The rainfall threshold in mm defines ground truth. The probability threshold def
 - No centered rolling, future shifts, bfill, or future-informed interpolation. Fit imputation/preprocessing/feature selection on train; validation/test only transform.
 - Lag/rolling calculations must not cross locations. Fix source pivot/fusion rules; do not use test to select sources or features.
 - If only final ERA5 reanalysis is available, report a retrospective experiment, not a verified real-time forecast. Check feature availability before operational use.
+
+### Feature dataset v1 (implemented 2026-10-21)
+
+- Source: Silver Open-Meteo hourly only (decided 2026-10-21; GHCNh station rain is kept for verification). Built by `scripts/build_rain_features.py` from `gold/ml_labels/rain_next24h_labels_v1.parquet`; tests in `tests/test_rain_features.py`.
+- Rows: usable labels only, one per location × UTC origin, written per split to `gold/ml_features/cart_rain_{train_2016_2023,val_2024,test_2025}_v1.parquet` with the manifest `cart_rain_features_v1.json`. The manifest holds the ordered feature list with units; training must use that order.
+- 22 numeric features, all computed per location on a gap-checked hourly grid from values stamped at or before t:
+  - At t: `temperature_c`, `dew_point_c`, `dew_point_depression_c`, `humidity_percent`, `pressure_hpa` (surface), `cloud_cover_percent`, `wind_speed_ms`, `precipitation_mm` (hour ending at t).
+  - Lags: `humidity_percent_lag3h`/`lag6h`, `cloud_cover_percent_lag3h`/`lag6h`.
+  - Trailing windows `(t − n h, t]`: `rain_past_{3,6,12,24}h_mm`, `humidity_mean_6h_percent`, `cloud_cover_mean_6h_percent`.
+  - Pressure tendency: `pressure_change_3h_hpa`, `pressure_change_24h_hpa`.
+  - Calendar of the origin in UTC+7: `hour_local`, `month_local`.
+- `location_code` is an identifier and a candidate categorical feature; encoding is decided in the training pipeline (ID 28).
+- `rain_next24h_mm` is kept for error analysis only and is never a feature.
+- A lag or window touching a missing hour is NaN; nothing is filled. In the 2016–2025 build, missing values occur only in the first 24 origin hours of 2016 (192 train rows). Imputation, if needed, is fitted on train in ID 28.
+- Solar radiation and wind direction were left out because the train-split EDA showed no separation (solar radiation also mostly encodes the hour). Open-Meteo is reanalysis with publication delay, so results are retrospective.
 
 ## Splits and threshold selection
 

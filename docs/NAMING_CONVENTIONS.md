@@ -149,7 +149,7 @@ The pattern above covers combined-source files or samples, retaining `source_nam
   * Dimensions: `dim_date`, `dim_time`, `dim_location`, `dim_source`, `dim_station`
 - Build feature datasets for CART classification:
   * Label: `RainNext24h` (0 / 1 or No / Yes).
-  * Features: temperature/pressure lags, preceding 3h/6h/12h rainfall totals, and seasonal variation.
+  * Features: temperature/pressure lags, preceding 3h/6h/12h rainfall totals, and seasonal variation. The implemented v1 feature list is in `docs/rain-label.md`.
 - Store predictions: `fact_weather_prediction`.
 
 ### 5.2. Paths and Examples
@@ -162,7 +162,7 @@ The pattern above covers combined-source files or samples, retaining `source_nam
 | **Dim Source** | `dim_source/dim_source.parquet` | `gold/dim_source/dim_source.parquet` |
 | **Dim Station** | `dim_station/dim_station.parquet` | `gold/dim_station/dim_station.parquet` |
 | **ML labels (implemented)** | `ml_labels/rain_next24h_labels_<version>.parquet` + `.json` manifest | `gold/ml_labels/rain_next24h_labels_v1.parquet` |
-| **ML Dataset (CART)** | `ml_features/cart_rain_prediction_<split>_<version>.parquet` | `gold/ml_features/cart_rain_train_2016_2023_v1.parquet`<br>`gold/ml_features/cart_rain_val_2024_v1.parquet`<br>`gold/ml_features/cart_rain_test_2025_v1.parquet` |
+| **ML Dataset (CART, implemented)** | `ml_features/cart_rain_<split tag>_<version>.parquet` (split tags `train_2016_2023`, `val_2024`, `test_2025`) + `ml_features/cart_rain_features_<version>.json` manifest | `gold/ml_features/cart_rain_train_2016_2023_v1.parquet`<br>`gold/ml_features/cart_rain_val_2024_v1.parquet`<br>`gold/ml_features/cart_rain_test_2025_v1.parquet` |
 | **Model predictions** | `predictions/year=YYYY/month=MM/rain_predictions_cart_<YYYYMMDD>.parquet` | `gold/predictions/year=2024/month=05/rain_predictions_cart_20240501.parquet` |
 
 ---

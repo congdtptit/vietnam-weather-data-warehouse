@@ -8,17 +8,19 @@ README này dùng tiếng Việt theo yêu cầu của dự án. Code và tài l
 
 ## Trạng thái hiện tại
 
-Repository đang ở giai đoạn **xây dựng nền tảng kỹ thuật**. Đã có:
+Cập nhật ngày **2026-10-21**. Bằng chứng chi tiết (lệnh đã chạy, số dòng, thời gian chạy, hạn chế) nằm trong [nhật ký tiến độ](docs/progress.md). Đã có:
 
 - Docker Compose cho MinIO, PostgreSQL và Airflow; Dockerfile Airflow 2.9.3/Python 3.10 với dependency được khóa phiên bản và checksum.
-- Khởi tạo bucket Bronze/Silver/Gold, DDL Star Schema và dữ liệu dimension mẫu.
-- Script thu thập Open-Meteo vào Bronze và DAG chạy thủ công theo từng tập dữ liệu.
-- Ruff, pre-commit, Makefile, pytest và cấu hình GitHub Actions.
-- Tài liệu nghiệp vụ, lộ trình triển khai theo 40 task trong bảng phân công và nhật ký tiến độ.
+- Khởi tạo bucket Bronze/Silver/Gold, DDL Star Schema và seed dimension; danh mục trạm đã xác minh trong `scripts/station_config.py`.
+- ETL bằng script: Open-Meteo và Meteostat → Bronze → Silver → Gold → `fact_weather_observation`. Meteostat chỉ giữ giá trị quan trắc (loại giá trị mô hình dự báo). DAG Airflow mới có cho bước Open-Meteo → Bronze; DAG Bronze → DW (task 17) chưa có.
+- Mưa ngày tại trạm từ NOAA GHCNh (5 trạm) → bảng riêng `fact_station_daily_rain`, kèm view so sánh với Open-Meteo.
+- View OLAP giờ/ngày/tháng/năm và độ phủ (`sql/02_olap_views.sql`); hướng dẫn dựng Power BI v1 (`docs/powerbi-dashboard-v1.md`). File PBIX chưa có.
+- Nhãn RainNext24h (ngưỡng 1 mm, chia train/validation/test theo năm UTC, purge biên) xuất ra Gold ML; notebook EDA `notebooks/eda_rain_next24h.ipynb` với môi trường riêng (`make notebook-setup`); bộ 22 đặc trưng không rò rỉ dữ liệu tương lai trong `gold/ml_features/` (3 file theo tập train/validation/test).
+- Ruff, pre-commit, Makefile, pytest và cấu hình GitHub Actions; tài liệu nghiệp vụ và đặc tả task tuần 2–5.
 
-Lần kiểm tra ngày **2026-10-10** ghi nhận `make check` và `make build` thành công: **15 test offline + 6 test integration** đạt. Phạm vi dữ liệu gồm ba giờ thời tiết giả lập, một GeoJSON Point và bốn mẫu kiểm tra thư viện CART. Còn năm cảnh báo được ghi trong [nhật ký tiến độ](docs/progress.md).
+Dữ liệu thực 2016–2025 đã được dựng lại trên một máy cục bộ ngày 2026-10-21: DW có 788.861 dòng quan sát giờ (Open-Meteo 8 vị trí; Meteostat chỉ Hà Nội và không có mưa), 17.866 dòng mưa ngày GHCNh, 700.800 nhãn dùng được. Lần kiểm tra gần nhất: `make test` 74 test đạt, `make test-integration` 14 test đạt.
 
-**Chưa có pipeline nghiệp vụ hoàn chỉnh**: collector ERA5/trạm/địa giới thực, xử lý Silver/Gold, loader DW, OLAP, mô hình CART và dashboard Power BI còn thiếu. Kết quả test hiện tại chưa chứng minh backfill lịch sử, dữ liệu DW thực, độ chính xác dự báo hoặc toàn bộ stack phát triển hoạt động từ đầu đến cuối. Việc hoàn thành nền tảng kỹ thuật cũng chưa đồng nghĩa tất cả task tuần 1 đã được nghiệm thu.
+**Chưa hoàn chỉnh**: ERA5, địa giới GeoJSON thực (63 tỉnh, trước sáp nhập), lưu payload gốc Bronze kèm manifest, DAG Bronze → DW, mô hình CART, bảng dự báo trong DW và dashboard Power BI. Nhãn và đặc trưng dựa trên dữ liệu tái phân tích, chưa phải số đo trạm. Trạng thái nghiệm thu từng task do bảng phân công quản lý, không suy ra từ việc có file.
 
 ## Tài liệu và phân công
 
@@ -34,6 +36,8 @@ Lần kiểm tra ngày **2026-10-10** ghi nhận `make check` và `make build` t
 | [Warehouse schema](docs/warehouse-schema.md) | DDL, khóa, quan hệ, calendar và OLAP |
 | [Rain label](docs/rain-label.md) | RainNext24h, chống leakage và validation/test |
 | [Naming conventions](docs/NAMING_CONVENTIONS.md) | Bucket, object key và phân vùng |
+| [Task specs tuần 2–5](docs/task-specs-weeks-2-5.md) | Đặc tả nghiệp vụ các task 4, 5, 8, 9, 17, 19, 20 |
+| [Power BI v1](docs/powerbi-dashboard-v1.md) | Hướng dẫn dựng dashboard từ view OLAP |
 | [Progress](docs/progress.md) | Bằng chứng đã thực hiện, kết quả kiểm tra và hạn chế |
 | [AGENTS.md](AGENTS.md) | Hướng dẫn làm việc trong repository cho AI |
 
@@ -144,6 +148,7 @@ Test_DL_weather/
 ├── docker-compose.test.yml        # Stack integration tạm
 ├── requirements.in / .txt          # Dependency runtime và lockfile
 ├── requirements-dev.in / .txt      # Công cụ phát triển và lockfile
+├── requirements-notebook.in / .txt # Môi trường notebook EDA và lockfile
 ├── constraints/                   # Constraints Airflow/Python
 ├── .agents/skills/                # Quy trình tái sử dụng
 ├── docs/                          # Tài liệu bằng tiếng Anh
@@ -155,16 +160,25 @@ Test_DL_weather/
 │   ├── warehouse-schema.md        # DW và OLAP
 │   ├── rain-label.md              # Nhãn mưa và đánh giá
 │   ├── NAMING_CONVENTIONS.md      # Quy ước đặt tên
+│   ├── task-specs-weeks-2-5.md    # Đặc tả task tuần 2–5
+│   ├── powerbi-dashboard-v1.md    # Hướng dẫn Power BI v1
 │   └── progress.md                # Bằng chứng tiến độ
 ├── dags/                          # DAG và hướng dẫn Airflow
 │   ├── weather_pipeline_health_dag.py
 │   └── dag_ingest_open_meteo.py
 ├── scripts/                       # Script và hướng dẫn ETL
-│   ├── init_minio.py
-│   └── ingest_open_meteo.py
+│   ├── init_minio.py, seed_dimensions.py, station_config.py
+│   ├── ingest_open_meteo.py, ingest_meteostat.py, ingest_ghcnh.py
+│   ├── transform_*_to_silver.py   # Open-Meteo, Meteostat, GHCNh → Silver
+│   ├── load_gold_observations.py, load_station_daily_rain.py
+│   ├── quality_checks.py
+│   └── rain_labels.py, export_rain_labels.py, rain_eda.py, build_rain_features.py
 ├── sql/                           # Khởi tạo DW và hướng dẫn SQL
 │   ├── 01_init_postgres.sh
-│   └── init_dwh_schema.sql
+│   ├── init_dwh_schema.sql
+│   ├── 02_olap_views.sql
+│   └── 03_station_daily_rain.sql
+├── notebooks/                     # Notebook EDA RainNext24h
 ├── tests/                         # Test offline/integration và fixture
 ├── plugins/                       # Thư mục plugin Airflow
 ├── config/                        # Cấu hình Airflow bổ sung

@@ -109,3 +109,18 @@ Regenerate the development lock and verify both targets when changing the runtim
 `.github/workflows/ci.yml` runs for new/updated pull requests, pushes to `main`, and manual dispatch. It uses Python 3.10 for tooling and the same Makefile for Ruff, Compose validation, offline tests, and integration tests. CI validates pre-commit configuration rather than repeating the two Ruff hooks already covered by `make lint`; local hooks still run before commits. It uses no production secrets and performs no deployment or historical downloads.
 
 After pushing the configuration, inspect Actions to verify an actual GitHub runner execution. To block merges when CI fails, configure branch protection/rulesets using status check **CI / Lint and tests** as displayed by GitHub. The workflow file does not enable protection automatically. See [progress](progress.md) to distinguish local checks from GitHub runs.
+
+## Analysis notebooks
+
+Notebooks live in `notebooks/` and use a separate environment so that Jupyter never enters the Airflow runtime or test images.
+
+- `requirements-notebook.in` pins the libraries shared with the pipeline to the versions in `requirements.txt` (pandas, pyarrow, numpy, scikit-learn, minio) and adds matplotlib, ipykernel, nbconvert, and nbformat. A `-c requirements.txt` constraint is not used because that lock targets Python 3.10 only.
+- Regenerate the lock with uv 0.8.22:
+
+```bash
+uv pip compile requirements-notebook.in --python-version 3.10 --universal --generate-hashes --output-file requirements-notebook.txt --no-header --quiet
+```
+
+- `make notebook-setup` creates `.venv-notebook` (ignored by Git), installs the hashed lock, and registers the Jupyter kernel `weather-notebook`.
+- `make notebook-run` executes `notebooks/eda_rain_next24h.ipynb` in place. It needs MinIO running with the Silver and Gold data described in `docs/progress.md`. Notebook logic lives in `scripts/` (for example `scripts/rain_eda.py`) and is unit-tested; notebooks only display results.
+- Verified on macOS x86_64 with Python 3.12.4. Other platforms were not tested.
