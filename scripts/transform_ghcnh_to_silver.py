@@ -52,6 +52,7 @@ P24 = "precipitation_24_hour"
 # neighbouring days, while heavy real events (338 mm, 491 mm) are supported.
 EXTREME_MM = 300.0
 EXTREME_SUPPORT_RATIO = 0.1
+
 SUB_DAILY_COLUMNS = [f"precipitation_{h}_hour" for h in (3, 6, 9, 12, 15, 18, 21)]
 
 SILVER_COLUMNS = [
@@ -69,6 +70,15 @@ SILVER_COLUMNS = [
     "report_type",
     "source_code",
 ]
+
+
+def extreme_is_supported(support_mm: float, total_mm: float) -> bool:
+    """Whether a sub-daily accumulation supports a 24 h total (missing support: no).
+
+    Values are reported in 0.1 mm, so the comparison is rounded: in binary floats
+    0.1 * 338.0 is 33.800000000000004, which would reject an exact 33.8 mm support.
+    """
+    return bool(round(support_mm, 1) >= round(EXTREME_SUPPORT_RATIO * total_mm, 2))
 
 
 def silver_keys(wmo_id: str, year: int) -> tuple[str, str]:
@@ -156,7 +166,7 @@ def clean_ghcnh_daily_rain(
             all_times <= df.at[idx, "window_end_utc"]
         )
         support = sub_daily_max[in_window].max()
-        unsupported[idx] = not (support >= EXTREME_SUPPORT_RATIO * df.at[idx, "rain_24h_mm"])
+        unsupported[idx] = not extreme_is_supported(support, df.at[idx, "rain_24h_mm"])
     extremes_quarantined = df.loc[unsupported].assign(quarantine_reason="unsupported_extreme")
     df = df.loc[~unsupported]
 

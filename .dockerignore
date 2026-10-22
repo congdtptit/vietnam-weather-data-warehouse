@@ -14,6 +14,7 @@
 !sql/02_olap_views.sql
 !sql/03_station_daily_rain.sql
 !sql/04_predictions.sql
+!sql/05_metadata_corrections.sql
 !tests/
 !tests/**
 **/__pycache__/

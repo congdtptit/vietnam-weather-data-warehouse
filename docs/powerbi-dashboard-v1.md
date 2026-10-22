@@ -1,6 +1,6 @@
 # Power BI Dashboard v1: Build Guide
 
-Version 0.1, 2026-10-21. Workbook ID 20 (N2). Builds the first dashboard on the OLAP views in `sql/02_olap_views.sql` (ID 19). The specification is in [task specifications §3](task-specs-weeks-2-5.md).
+Version 0.2, 2026-10-22 (day-count DAX fix; 0.1: 2026-10-21). Workbook ID 20 (N2). Builds the first dashboard on the OLAP views in `sql/02_olap_views.sql` (ID 19). The specification is in [task specifications §3](task-specs-weeks-2-5.md).
 
 This guide was written on macOS, where Power BI Desktop cannot run. **No `.pbix` exists yet.** The model, DAX, and reference numbers below were derived from the live DW; none of them has been tested inside Power BI Desktop. Record the actual build and the reconciliation results in [progress](progress.md).
 
@@ -33,7 +33,7 @@ docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USE
 | `public.dim_date` | 4,018 | Date dimension (mark as date table) |
 | `public.dim_time` | 24 | Hour of day |
 | `public.dim_location` | 8 | Research points |
-| `public.dim_source` | 4 | Sources |
+| `public.dim_source` | 5 | Sources (ERA5, NOAA, and GHCNh have no rows in these views: in Power Query keep only Open-Meteo and Meteostat, so the source slicer lists only sources with data) |
 | `public.vw_obs_daily` | 32,886 | Main daily fact |
 | `public.vw_obs_hourly` | 788,861 | Hourly fact for hour drill-down |
 | `public.vw_coverage` | 99 | Data-quality page |
@@ -86,8 +86,12 @@ CALCULATE ( COUNTROWS ( vw_obs_daily ), vw_obs_daily[is_complete_rain_day] = TRU
 Rainy Days (location-days) =
 IF (
     [Selected Source OK] && [Complete Rain Days] > 0,
-    CALCULATE ( COUNTROWS ( vw_obs_daily ), vw_obs_daily[is_rainy_day] = TRUE () )
+    COALESCE (
+        CALCULATE ( COUNTROWS ( vw_obs_daily ), vw_obs_daily[is_rainy_day] = TRUE () ),
+        0
+    )
 )
+-- COUNTROWS of an empty table is BLANK; with complete days and no rainy day the answer is 0.
 
 Rainy Days per Location =
 IF (
@@ -101,7 +105,10 @@ CALCULATE ( COUNTROWS ( vw_obs_daily ), vw_obs_daily[is_complete_temp_day] = TRU
 Hot Days (location-days) =
 IF (
     [Selected Source OK] && [Complete Temp Days] > 0,
-    CALCULATE ( COUNTROWS ( vw_obs_daily ), vw_obs_daily[is_hot_day] = TRUE () )
+    COALESCE (
+        CALCULATE ( COUNTROWS ( vw_obs_daily ), vw_obs_daily[is_hot_day] = TRUE () ),
+        0
+    )
 )
 
 Hot Days per Location =
@@ -120,7 +127,7 @@ Rain Coverage (%) =
 DIVIDE ( SUM ( vw_coverage[rain_valid_hours] ), SUM ( vw_coverage[expected_hours] ) )
 ```
 
-Format rain with 1 decimal place and "mm", temperatures with 2 decimal places and "°C", and coverage as a percentage. Do not replace BLANK with 0: Meteostat has no rain, and that must show as empty, not as "0 mm".
+Format rain with 1 decimal place and "mm", temperatures with 2 decimal places and "°C", and coverage as a percentage. Do not replace BLANK with 0 in general: Meteostat has no rain, and that must show as empty, not as "0 mm". The day counts are the exception: inside the completeness guard they return 0, because `AVERAGEX` skips BLANK and would otherwise average only over locations that had at least one such day (corrected 2026-10-22; before the fix March 2024 showed 1.33 hot days per location instead of 0.50).
 
 ## 5. Pages
 
@@ -136,7 +143,7 @@ Every page subtitle should state: "Local calendar (UTC+7); rainy day ≥ 1 mm an
 
 ## 6. Reconciliation (required before calling v1 done)
 
-Set the filters in Power BI and compare with these values, which were computed from the views on 2026-10-21. Record each comparison in `docs/progress.md`.
+Set the filters in Power BI and compare with these values, which were computed from the views on 2026-10-21 (the two monthly hot-day rows on 2026-10-22). Record each comparison in `docs/progress.md`.
 
 | Filters | Measure | Expected |
 | --- | --- | --- |
@@ -150,6 +157,8 @@ Set the filters in Power BI and compare with these values, which were computed f
 | Open-Meteo, HAN, 2024-07-15 | Rain / Temp Mean / Max | 28.9 mm / 27.56 / 31.60 °C |
 | Open-Meteo, all 8 locations, 2024 | Rain per Location / Rainy Days (location-days) | 2,330.3 mm / 1,466 |
 | Open-Meteo, HAN, 2024-07-15 14:00 (hourly page) | Rain Hourly / Temperature | 1.0 mm / 28.0 °C |
+| Open-Meteo, all 8 locations, March 2024 | Hot Days per Location | 0.50 (4 hot days at 8 locations) |
+| Open-Meteo, all 8 locations, January 2024 | Hot Days per Location | 0 (not BLANK) |
 | Two sources selected | Any rain or temperature measure | BLANK |
 
 Ten-year Open-Meteo reference (2016–2025, mean per year): HAN 2,202.4 mm and 179.2 rainy days, LCA 2,949.4 mm and 247.3 rainy days (wettest), NBI 2,012.4 mm and 170.6 rainy days.

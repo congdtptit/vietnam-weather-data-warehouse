@@ -8,7 +8,6 @@ import pandas as pd
 import pytest
 from build_rain_features import FEATURES, features_keys
 from evaluate_cart_test import evaluate_test, evaluation_keys
-from minio.error import S3Error
 from sklearn.dummy import DummyClassifier
 from test_train_cart import GRID, _client, _split
 from train_cart import classification_metrics, make_pipeline, model_keys, train_cart
@@ -24,11 +23,6 @@ def _trained_client():
     manifest["splits_utc"]["test"] = ["2025", "2026"]
     store[manifest_key] = json.dumps(manifest).encode()
 
-    def stat(bucket, key):
-        if key not in store:
-            raise S3Error("NoSuchKey", "missing", "/r", "req", "host", None)
-
-    client.stat_object.side_effect = stat
     train_cart(grid=GRID, n_jobs=1, client=client)
     client.get_object.reset_mock()
     return client, store

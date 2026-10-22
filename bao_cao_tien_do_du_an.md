@@ -1,3 +1,5 @@
+> **Superseded snapshot (note added 2026-10-22).** This report reflects the state on 2026-10-12 and is kept unchanged as a historical record. For current status use [docs/progress.md](docs/progress.md) (evidence) and the allocation workbook (ownership and status). Known errors in the text below: the DW now holds 788,861 hourly rows (not 994,145) after the station-mapping fix and the Meteostat observation filter; 48825 is Hà Đông and 48826 is Phù Liễn/Hải Phòng (not Việt Trì → PTO and Thái Nguyên → TNG), and `dim_station` has 12 stations; the RainNext24h label uses rain over `(t, t+24h]`, while only features use values `<= t`; the label contract was decided on 2026-10-21, not 2026-10-12; CART, OLAP views, and DW predictions have since been implemented. Task completion is not "Completed" unless the workbook says so.
+
 # Project Progress Report
 ## Multi-Source Northern Vietnam Weather Data Warehouse
 

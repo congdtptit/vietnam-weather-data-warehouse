@@ -9,7 +9,7 @@
 CREATE TABLE IF NOT EXISTS dim_date (
     date_key INT PRIMARY KEY,              -- Định dạng YYYYMMDD (ví dụ: 20240501)
     full_date DATE NOT NULL,
-    day_of_week INT NOT NULL,              -- 1 (Chủ nhật) - 7 (Thứ bảy) hoặc ISO 1-7
+    day_of_week INT NOT NULL,              -- ISO weekday: 1 = Monday (Thứ Hai) ... 7 = Sunday (Chủ Nhật)
     day_name VARCHAR(15) NOT NULL,         -- Thứ Hai, Thứ Ba...
     day_of_month INT NOT NULL,
     month INT NOT NULL,
@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS dim_time (
     time_key INT PRIMARY KEY,              -- Định dạng HHMM (ví dụ: 0000, 0100... 2300)
     hour_24 INT NOT NULL,                  -- 0 -> 23
     minute INT NOT NULL,                   -- 0 -> 59
-    period_of_day VARCHAR(20) NOT NULL     -- Sáng (Morning), Chiều (Afternoon), Tối (Evening), Đêm (Night)
+    period_of_day VARCHAR(20) NOT NULL     -- Sáng 05-10, Trưa 11-13, Chiều 14-17, Tối 18-21, Đêm 22-04 (local hour)
 );
 
 -- 3. Bảng Dimension: DimLocation (Địa điểm khu vực miền Bắc)

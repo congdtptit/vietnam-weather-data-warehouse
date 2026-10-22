@@ -372,3 +372,13 @@ def test_comparison_view_uses_the_same_12_utc_window(rain_db):
     assert rows[0][4] is True
     # 2024-01-03 has no model hours in this fixture: model rain is unknown, not 0
     assert rows[1][0] == date(2024, 1, 3) and rows[1][2] is None
+
+
+def test_extreme_support_exactly_at_the_ratio_is_accepted():
+    from transform_ghcnh_to_silver import extreme_is_supported
+
+    assert 0.1 * 338.0 > 33.8  # the float product that used to reject an exact support
+    assert extreme_is_supported(33.8, 338.0)
+    assert not extreme_is_supported(33.7, 338.0)
+    assert extreme_is_supported(49.2, 491.3) and not extreme_is_supported(49.1, 491.3)
+    assert not extreme_is_supported(float("nan"), 700.0)  # no sub-daily report

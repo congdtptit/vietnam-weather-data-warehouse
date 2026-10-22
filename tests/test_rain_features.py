@@ -146,6 +146,12 @@ def _client(store):
 
     client.get_object.side_effect = get
     client.put_object.side_effect = put
+
+    def stat(bucket, key):
+        if key not in store:
+            raise S3Error("NoSuchKey", "missing", "/r", "req", "host", None)
+
+    client.stat_object.side_effect = stat
     return client
 
 
@@ -178,3 +184,18 @@ def test_trailing_rain_sums_are_free_of_float_error():
     assert (
         row["rain_past_24h_mm"] == 2.4 and row["rain_past_3h_mm"] == 0.3
     )  # exact, not 2.4000000000000004
+
+
+def test_export_stamps_requested_version_and_refuses_overwrite():
+    import export_rain_labels as erl
+
+    store: dict[str, bytes] = {}
+    client = _client(store)
+    erl.export_labels(2024, 2024, client=client)
+    export_features(2024, 2024, version="vtest", client=client)
+    split_keys, _ = features_keys("vtest")
+    val = pd.read_parquet(io.BytesIO(store[split_keys["validation"]]))
+    assert set(val["feature_version"]) == {"vtest"}
+
+    with pytest.raises(RuntimeError, match="already exist"):
+        export_features(2024, 2024, version="vtest", client=client)

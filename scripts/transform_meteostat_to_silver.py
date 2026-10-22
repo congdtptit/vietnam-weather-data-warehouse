@@ -698,7 +698,7 @@ if __name__ == "__main__":
         sys.exit(0)
     except KeyboardInterrupt:
         print("\n[!] Process interrupted by user.")
-        sys.exit(0)
+        sys.exit(130)
     except Exception as e:
         print(f"\n[!] Error: {e}", file=sys.stderr)
         sys.exit(1)

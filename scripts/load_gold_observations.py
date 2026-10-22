@@ -146,6 +146,49 @@ class SilverReadError(RuntimeError):
         self.original_error = original_error
 
 
+# Sources this loader reads from Silver weather_hourly/. A month's DW retraction covers all of
+# them, so a source that disappears from Silver is removed from the DW instead of lingering.
+LOADED_SOURCES = ("Open-Meteo", "Meteostat")
+
+
+def open_meteo_silver_key(location_code: str, year: int, month: int) -> str:
+    return (
+        f"weather_hourly/year={year}/month={month:02d}/"
+        f"weather_hourly_{location_code}_{year}{month:02d}.parquet"
+    )
+
+
+def requested_locations(location_filter: str | None = None) -> list[str]:
+    if location_filter:
+        code = location_filter.strip().upper()
+        if code not in CANONICAL_LOCATIONS:
+            raise ValueError(f"Unknown location: {location_filter}")
+        return [code]
+    return sorted(CANONICAL_LOCATIONS)
+
+
+def missing_open_meteo_objects(
+    minio_client: Minio, year: int, month: int, locations: list[str]
+) -> list[str]:
+    """Open-Meteo is gridded and expected for every location-month; list the absent objects.
+
+    A missing object must fail the month: otherwise the retraction would silently delete that
+    location's DW rows. Meteostat objects may legitimately be absent (no station data).
+    """
+    prefix = f"weather_hourly/year={year}/month={month:02d}/"
+    present = {o.object_name for o in minio_client.list_objects(BUCKET_SILVER, prefix=prefix)}
+    return [k for loc in locations if (k := open_meteo_silver_key(loc, year, month)) not in present]
+
+
+def retraction_scope(
+    loc_map: dict[str, int], source_map: dict[str, int], location_filter: str | None = None
+) -> tuple[list[int], list[int]]:
+    """Source and location keys of the requested scope (not of the rows that arrived)."""
+    source_keys = sorted(source_map[s] for s in LOADED_SOURCES if s in source_map)
+    location_keys = sorted(loc_map[c] for c in requested_locations(location_filter))
+    return source_keys, location_keys
+
+
 def is_s3_not_found_error(err: Any) -> bool:
     """Return True if the error corresponds to an S3 'NoSuchKey' / HTTP 404 (object missing).
 
@@ -382,10 +425,10 @@ def process_month_observations(
     # Station key lookup (nullable for model/grid sources like Open-Meteo)
     if "station_id" in combined_df.columns:
         combined_df["station_key"] = (
-            combined_df["station_id"].astype(str).str.strip().map(station_map)
+            combined_df["station_id"].astype(str).str.strip().map(station_map).astype("Int64")
         )
     else:
-        combined_df["station_key"] = None
+        combined_df["station_key"] = pd.Series(pd.NA, index=combined_df.index, dtype="Int64")
 
     # Ensure all measurement columns exist
     for col in FACT_MEASUREMENT_COLS:
@@ -474,6 +517,8 @@ def save_gold_parquet(
                 .sort_values(by=grain_cols)
                 .reset_index(drop=True)
             )
+            # Older Gold files stored station_key as float64 (1.0/NaN)
+            df_to_save["station_key"] = df_to_save["station_key"].astype("Int64")
         else:
             df_to_save = df
     else:
@@ -541,9 +586,12 @@ def load_dwh_fact_observations(
     deletes any existing rows within that exact scope whose grain keys are
     no longer present in the incoming dataset, then upserts the incoming
     rows.  This ensures retracted Silver rows are consistently removed from
-    the DW.
+    the DW.  With a scope, an empty dataset deletes every row in that scope.
     """
-    if df.empty:
+    scope_provided = all(
+        v is not None for v in [source_keys, location_keys, month_start_utc, next_month_start_utc]
+    )
+    if df.empty and not scope_provided:
         return 0
 
     records: list[tuple[Any, ...]] = []
@@ -565,6 +613,7 @@ def load_dwh_fact_observations(
                 clean_row_value(row["wind_direction_deg"]),
                 clean_row_value(row["cloud_cover_percent"]),
                 clean_row_value(row["solar_radiation_wm2"]),
+                clean_row_value(row.get("pressure_type")),
             )
         )
 
@@ -573,7 +622,8 @@ def load_dwh_fact_observations(
             date_key, time_key, location_key, source_key, station_key,
             timestamp_utc, timestamp_local,
             temperature_c, humidity_percent, pressure_hpa, precipitation_mm,
-            wind_speed_ms, wind_direction_deg, cloud_cover_percent, solar_radiation_wm2
+            wind_speed_ms, wind_direction_deg, cloud_cover_percent, solar_radiation_wm2,
+            pressure_type
         ) VALUES %s
         ON CONFLICT (date_key, time_key, location_key, source_key)
         DO UPDATE SET
@@ -585,6 +635,7 @@ def load_dwh_fact_observations(
             wind_direction_deg = EXCLUDED.wind_direction_deg,
             cloud_cover_percent = EXCLUDED.cloud_cover_percent,
             solar_radiation_wm2 = EXCLUDED.solar_radiation_wm2,
+            pressure_type = EXCLUDED.pressure_type,
             station_key = EXCLUDED.station_key,
             timestamp_utc = EXCLUDED.timestamp_utc,
             timestamp_local = EXCLUDED.timestamp_local;
@@ -601,10 +652,6 @@ def load_dwh_fact_observations(
             # --- Finding 2 (P1): Transactionally delete retracted rows ---
             # Only when all scope parameters are supplied, delete rows within
             # the verified scope whose keys no longer appear in the curated data.
-            scope_provided = all(
-                v is not None
-                for v in [source_keys, location_keys, month_start_utc, next_month_start_utc]
-            )
             if scope_provided:
                 # Fetch existing grain keys within the verified scope
                 cur.execute(
@@ -633,7 +680,8 @@ def load_dwh_fact_observations(
                             grain,
                         )
 
-            execute_values(cur, upsert_sql, records, page_size=2500)
+            if records:
+                execute_values(cur, upsert_sql, records, page_size=2500)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -693,6 +741,18 @@ def run_gold_pipeline(
                 ym_str = f"{year}{m_str}"
                 stats["total_months_processed"] += 1
 
+                missing = missing_open_meteo_objects(
+                    minio_client, year, month, requested_locations(target_location)
+                )
+                if missing:
+                    print(
+                        f"  [!] Month {ym_str}: {len(missing)} Silver Open-Meteo object(s) missing"
+                    )
+                    stats["failures"].append(
+                        {"month": ym_str, "stage": "silver_missing", "failed_keys": missing}
+                    )
+                    continue
+
                 # 1. Process and curate observations for month
                 try:
                     df_month = process_month_observations(
@@ -721,7 +781,8 @@ def run_gold_pipeline(
                     continue
 
                 if df_month.empty:
-                    print(f"  [-] Month {ym_str}: No valid observations found.")
+                    print(f"  [!] Month {ym_str}: No valid observations found.")
+                    stats["failures"].append({"month": ym_str, "stage": "empty_month"})
                     continue
 
                 records_count = len(df_month)
@@ -749,12 +810,9 @@ def run_gold_pipeline(
                 # 3. Load into PostgreSQL DWH (with transactional retraction)
                 dwh_loaded = 0
                 if not skip_dwh:
-                    # Compute the verified scope for retraction reconciliation
-                    scope_source_keys = sorted(
-                        df_month["source_key"].dropna().astype(int).unique().tolist()
-                    )
-                    scope_location_keys = sorted(
-                        df_month["location_key"].dropna().astype(int).unique().tolist()
+                    # Retraction scope = the requested scope, not the rows that arrived
+                    scope_source_keys, scope_location_keys = retraction_scope(
+                        loc_map, source_map, target_location
                     )
                     scope_month_start = datetime(year, month, 1, tzinfo=timezone.utc)
                     _, scope_last_day = calendar.monthrange(year, month)
@@ -853,7 +911,10 @@ def main():
         "--skip-gold-parquet", action="store_true", help="Skip saving Gold Parquet to MinIO"
     )
     parser.add_argument(
-        "--overwrite", action="store_true", default=True, help="Overwrite existing files"
+        "--overwrite",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Replace existing Gold Parquet (default); --no-overwrite keeps it, DW still loads",
     )
 
     args = parser.parse_args()
@@ -870,7 +931,7 @@ def main():
         sys.exit(0)
     except KeyboardInterrupt:
         print("\n[!] Process interrupted by user.")
-        sys.exit(0)
+        sys.exit(130)
     except Exception as e:
         print(f"\n[!] Error: {e}", file=sys.stderr)
         sys.exit(1)

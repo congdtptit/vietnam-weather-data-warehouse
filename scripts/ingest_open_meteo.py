@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """
 scripts/ingest_open_meteo.py
-Thu thập dữ liệu khí tượng lịch sử từ Open-Meteo Archive API và lưu vào tầng Bronze (MinIO).
+Download historical hourly weather from the Open-Meteo Archive API into Bronze (MinIO).
 
-Phân chia dữ liệu theo yêu cầu đề tài:
-- 2016 - 2023 : Dữ liệu huấn luyện (Training)
-- 2024        : Dữ liệu kiểm định (Validation)
-- 2025        : Dữ liệu kiểm thử (Testing)
+Year splits from the proposal:
+- 2016 - 2023 : training
+- 2024        : validation
+- 2025        : testing
 
-8 địa điểm nghiên cứu miền Bắc:
+Eight northern locations:
 HAN (Hà Nội), PTO (Phú Thọ), TNG (Thái Nguyên), TUQ (Tuyên Quang),
 LCA (Lào Cai), HBI (Hòa Bình), HPH (Hải Phòng), NBI (Ninh Bình).
+
+A requested file that cannot be downloaded or uploaded is a failure: the run continues
+with the remaining files, then raises so the CLI exits 1 and Airflow can retry.
 """
 
 import argparse
@@ -26,14 +29,14 @@ import requests
 from minio import Minio
 from minio.error import S3Error
 
-# Cấu hình encoding chuẩn utf-8 trên Windows
+# Use UTF-8 console output on Windows
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
 
-# Fallback nạp biến môi trường từ .env
+# Load .env when python-dotenv is not installed
 try:
     from dotenv import load_dotenv
 
@@ -48,7 +51,7 @@ except ImportError:
                     k, v = line.split("=", 1)
                     os.environ.setdefault(k.strip(), v.strip().strip("'\""))
 
-# Cấu hình MinIO
+# MinIO configuration
 MINIO_HOST = os.getenv("MINIO_EXTERNAL_ENDPOINT", "localhost:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ROOT_USER", "minioadmin")
 MINIO_SECRET_KEY = os.getenv("MINIO_ROOT_PASSWORD", "minioadmin")
@@ -57,7 +60,7 @@ BUCKET_BRONZE = os.getenv("MINIO_BUCKET_BRONZE", "bronze")
 
 OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 
-# 8 Địa điểm đại diện miền Bắc trong phạm vi nghiên cứu của đề tài
+# The eight representative northern locations in the project scope
 NORTH_LOCATIONS = {
     "HAN": {"name": "Hà Nội", "latitude": 21.0285, "longitude": 105.8542},
     "PTO": {"name": "Phú Thọ", "latitude": 21.3986, "longitude": 105.2280},
@@ -69,7 +72,7 @@ NORTH_LOCATIONS = {
     "NBI": {"name": "Ninh Bình", "latitude": 20.2506, "longitude": 105.9745},
 }
 
-# Phân chia tập dữ liệu
+# Dataset split per year
 YEAR_SPLITS = {
     2016: "training",
     2017: "training",
@@ -83,27 +86,27 @@ YEAR_SPLITS = {
     2025: "testing",
 }
 
-# Danh sách các trường dữ liệu khí tượng thu thập
+# Hourly variables requested
 HOURLY_VARIABLES = [
-    "temperature_2m",  # Nhiệt độ không khí tại 2m (°C)
-    "relative_humidity_2m",  # Độ ẩm tương đối (%)
-    "dew_point_2m",  # Điểm sương (°C)
-    "apparent_temperature",  # Nhiệt độ cảm nhận (°C)
-    "precipitation",  # Tổng lượng mưa (mm) -> Target RainNext24h
-    "rain",  # Lượng mưa dạng lỏng (mm)
-    "weather_code",  # Mã thời tiết WMO
-    "surface_pressure",  # Áp suất bề mặt khí quyển (hPa)
-    "cloud_cover",  # Độ che phủ mây tổng (%)
-    "wind_speed_10m",  # Tốc độ gió tại 10m (m/s)
-    "wind_direction_10m",  # Hướng gió tại 10m (độ)
-    "wind_gusts_10m",  # Tốc độ gió giật (m/s)
-    "direct_normal_irradiance",  # Bức xạ mặt trời trực tiếp (W/m²)
-    "shortwave_radiation",  # Bức xạ sóng ngắn (W/m²)
+    "temperature_2m",  # Air temperature at 2 m (°C)
+    "relative_humidity_2m",  # Relative humidity (%)
+    "dew_point_2m",  # Dew point (°C)
+    "apparent_temperature",  # Apparent temperature (°C)
+    "precipitation",  # Total precipitation (mm), RainNext24h label source
+    "rain",  # Liquid rain (mm)
+    "weather_code",  # WMO weather code
+    "surface_pressure",  # Surface pressure (hPa)
+    "cloud_cover",  # Total cloud cover (%)
+    "wind_speed_10m",  # Wind speed at 10 m (m/s)
+    "wind_direction_10m",  # Wind direction at 10 m (degrees)
+    "wind_gusts_10m",  # Wind gusts (m/s)
+    "direct_normal_irradiance",  # Direct normal irradiance (W/m²)
+    "shortwave_radiation",  # Shortwave radiation (W/m²)
 ]
 
 
 def get_minio_client() -> Minio:
-    """Khởi tạo client kết nối MinIO"""
+    """Create a MinIO client and make sure the Bronze bucket exists."""
     endpoint = MINIO_HOST
     try:
         client = Minio(
@@ -116,7 +119,7 @@ def get_minio_client() -> Minio:
             client.make_bucket(BUCKET_BRONZE)
         return client
     except Exception:
-        # Nếu chạy trong mạng nội bộ docker
+        # Inside the Docker network
         alt_endpoint = os.getenv("MINIO_ENDPOINT", "minio:9000")
         client = Minio(
             endpoint=alt_endpoint,
@@ -152,7 +155,11 @@ def is_s3_not_found_error(err: Any) -> bool:
 
 
 def fetch_open_meteo_year(lat: float, lon: float, year: int, max_retries: int = 5) -> dict:
-    """Gửi request tới Open-Meteo Archive API để lấy dữ liệu 1 năm của 1 tọa độ"""
+    """Fetch one calendar year of hourly data for one coordinate.
+
+    Retries only transient failures (HTTP 429, 5xx, connection errors) with exponential
+    backoff; any other HTTP status fails immediately.
+    """
     start_date = f"{year}-01-01"
     end_date = f"{year}-12-31"
 
@@ -173,24 +180,16 @@ def fetch_open_meteo_year(lat: float, lon: float, year: int, max_retries: int = 
             resp = requests.get(OPEN_METEO_ARCHIVE_URL, params=params, timeout=30)
             if resp.status_code == 200:
                 return resp.json()
-            elif resp.status_code == 429:
-                print(
-                    f"      [!] Bị giới hạn tần suất (Rate limit 429), chờ {delay}s trước khi thử lại..."
-                )
-                time.sleep(delay)
-                delay *= 2
-            else:
-                print(f"      [!] Lỗi HTTP {resp.status_code}: {resp.text[:100]}, chờ {delay}s...")
-                time.sleep(delay)
-                delay *= 2
+            if resp.status_code != 429 and resp.status_code < 500:
+                raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:100]}")
+            print(f"      [!] HTTP {resp.status_code}, retrying in {delay}s...")
         except requests.RequestException as ex:
-            print(f"      [!] Ngoại lệ kết nối: {ex}, chờ {delay}s...")
+            print(f"      [!] Connection error: {ex}, retrying in {delay}s...")
+        if attempt < max_retries:
             time.sleep(delay)
             delay *= 2
 
-    raise RuntimeError(
-        f"Không thể tải dữ liệu từ Open-Meteo sau {max_retries} lần thử cho năm {year}"
-    )
+    raise RuntimeError(f"Open-Meteo request for {year} failed after {max_retries} attempts")
 
 
 def ingest_data(
@@ -200,7 +199,10 @@ def ingest_data(
     target_split: str = None,
     overwrite: bool = False,
 ):
-    """Quy trình thu thập và tải lên MinIO Bronze"""
+    """Download the requested location-years into Bronze.
+
+    Raises RuntimeError after the loop when any requested file failed.
+    """
     client = get_minio_client()
 
     locations = NORTH_LOCATIONS
@@ -208,7 +210,7 @@ def ingest_data(
         loc_code = target_location.upper()
         if loc_code not in NORTH_LOCATIONS:
             raise ValueError(
-                f"Mã địa điểm không hợp lệ: {target_location}. Chọn trong: {list(NORTH_LOCATIONS.keys())}"
+                f"Unknown location: {target_location}. Choose from: {list(NORTH_LOCATIONS.keys())}"
             )
         locations = {loc_code: NORTH_LOCATIONS[loc_code]}
 
@@ -221,14 +223,15 @@ def ingest_data(
     current_idx = 0
     success_count = 0
     skipped_count = 0
+    failures: list[str] = []
 
     print("=" * 80)
-    print(" BẮT ĐẦU THU THẬP DỮ LIỆU KHÍ TƯỢNG OPEN-METEO -> MINIO BRONZE")
+    print(" OPEN-METEO INGESTION -> MINIO BRONZE")
     print("=" * 80)
-    print(f"[*] Phạm vi năm: {years}")
-    print(f"[*] Số địa điểm: {len(locations)} ({', '.join(locations.keys())})")
-    print(f"[*] Tổng số file dự kiến: {total_tasks}")
-    print(f"[*] Các trường dữ liệu: {', '.join(HOURLY_VARIABLES)}")
+    print(f"[*] Years: {years}")
+    print(f"[*] Locations: {len(locations)} ({', '.join(locations.keys())})")
+    print(f"[*] Files requested: {total_tasks}")
+    print(f"[*] Variables: {', '.join(HOURLY_VARIABLES)}")
     print("=" * 80)
 
     for loc_code, loc_info in locations.items():
@@ -236,14 +239,14 @@ def ingest_data(
         lat = loc_info["latitude"]
         lon = loc_info["longitude"]
 
-        print(f"\n>>> Đang xử lý địa điểm [{loc_code}] - {loc_name} (Tọa độ: {lat}, {lon})")
+        print(f"\n>>> Location [{loc_code}] - {loc_name} ({lat}, {lon})")
 
         for year in years:
             current_idx += 1
             split_type = YEAR_SPLITS[year]
             object_path = f"open_meteo/hourly/year={year}/open_meteo_{loc_code}_hourly_{year}0101_{year}1231.json"
 
-            # Kiểm tra xem file đã tồn tại trên MinIO chưa
+            # Skip objects that already exist (current size-based rule)
             if not overwrite:
                 try:
                     stat = client.stat_object(BUCKET_BRONZE, object_path)
@@ -260,16 +263,16 @@ def ingest_data(
                         raise
 
             print(
-                f"  [{current_idx}/{total_tasks}] (Split: {split_type.upper():<10}) Đang tải {loc_code} năm {year} ...",
+                f"  [{current_idx}/{total_tasks}] (Split: {split_type.upper():<10}) Downloading {loc_code} {year} ...",
                 end="",
                 flush=True,
             )
 
             try:
-                # 1. Gọi API Open-Meteo
+                # 1. Call the Open-Meteo API
                 data = fetch_open_meteo_year(lat=lat, lon=lon, year=year)
 
-                # 2. Bổ sung metadata quản lý dữ liệu
+                # 2. Add pipeline metadata
                 data["_pipeline_metadata"] = {
                     "source": "Open-Meteo Archive API",
                     "location_code": loc_code,
@@ -280,7 +283,7 @@ def ingest_data(
                     "hourly_record_count": len(data.get("hourly", {}).get("time", [])),
                 }
 
-                # 3. Chuẩn bị buffer JSON và tải lên MinIO
+                # 3. Upload the JSON to MinIO
                 json_bytes = json.dumps(data, ensure_ascii=False).encode("utf-8")
                 client.put_object(
                     bucket_name=BUCKET_BRONZE,
@@ -291,43 +294,50 @@ def ingest_data(
                 )
 
                 records = data["_pipeline_metadata"]["hourly_record_count"]
-                print(f" XONG ({records} bản ghi theo giờ, {len(json_bytes) / 1024:.1f} KB)")
+                print(f" DONE ({records} hourly records, {len(json_bytes) / 1024:.1f} KB)")
                 success_count += 1
 
-                # Tạm dừng nhẹ 1.2s để tuân thủ fair-use policy của Open-Meteo API
+                # Pause 1.2 s to respect the Open-Meteo fair-use policy
                 time.sleep(1.2)
 
             except Exception as err:
-                print(f" THẤT BẠI: {err}")
+                print(f" FAILED: {err}")
+                failures.append(f"{object_path}: {err}")
 
     print("\n" + "=" * 80)
-    print(" KẾT QUẢ THU THẬP DỮ LIỆU:")
-    print(f"  + Hoàn thành thành công : {success_count} file")
-    print(f"  + Đã có sẵn (bỏ qua)    : {skipped_count} file")
-    print(f"  + Tổng số file Bronze   : {success_count + skipped_count} / {total_tasks}")
+    print(" INGESTION RESULT:")
+    print(f"  + Downloaded : {success_count} files")
+    print(f"  + Skipped    : {skipped_count} files (already present)")
+    print(f"  + Failed     : {len(failures)} files")
+    print(f"  + Bronze     : {success_count + skipped_count} / {total_tasks}")
     print("=" * 80)
+    if failures:
+        raise RuntimeError(
+            f"Open-Meteo ingestion completed with {len(failures)} failure(s): "
+            + "; ".join(failures)
+        )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Thu thập dữ liệu thời tiết Open-Meteo cho Data Lake Bronze"
+        description="Download Open-Meteo hourly weather into the Bronze layer"
     )
-    parser.add_argument("--start-year", type=int, default=2016, help="Năm bắt đầu (mặc định: 2016)")
-    parser.add_argument("--end-year", type=int, default=2025, help="Năm kết thúc (mặc định: 2025)")
+    parser.add_argument("--start-year", type=int, default=2016, help="First year (default: 2016)")
+    parser.add_argument("--end-year", type=int, default=2025, help="Last year (default: 2025)")
     parser.add_argument(
         "--location",
         type=str,
         default=None,
-        help="Mã địa điểm cụ thể (ví dụ: HAN, HPH) hoặc để trống cho tất cả 8 địa điểm",
+        help="One location code (for example HAN, HPH); all eight when omitted",
     )
     parser.add_argument(
         "--split",
         type=str,
         default=None,
         choices=["training", "validation", "testing"],
-        help="Lọc theo tập dữ liệu",
+        help="Only years of this split",
     )
-    parser.add_argument("--overwrite", action="store_true", help="Ghi đè file nếu đã tồn tại")
+    parser.add_argument("--overwrite", action="store_true", help="Replace existing objects")
 
     args = parser.parse_args()
 
@@ -340,8 +350,8 @@ if __name__ == "__main__":
             overwrite=args.overwrite,
         )
     except KeyboardInterrupt:
-        print("\n[!] Tiến trình bị dừng bởi người dùng.")
-        sys.exit(0)
+        print("\n[!] Interrupted by user.")
+        sys.exit(130)
     except Exception as e:
-        print(f"\n[!] Lỗi: {e}")
+        print(f"\n[!] Error: {e}")
         sys.exit(1)

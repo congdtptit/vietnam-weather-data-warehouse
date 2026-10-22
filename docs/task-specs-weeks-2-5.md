@@ -7,7 +7,7 @@ Version 0.1, 2026-10-21. Proposed specifications for workbook IDs 19, 20, 9, 17,
 | Item | State |
 | --- | --- |
 | DW `fact_weather_observation` | 788,861 rows, 0 duplicate keys: Open-Meteo 8 locations × 87,672 hours (2016–2025); Meteostat HAN only (87,485 rows, temperature/humidity/wind, no precipitation) |
-| Dimensions | `dim_date` 4,018 days (2016–2026, Vietnam local calendar), `dim_time` 24, `dim_location` 8, `dim_source` 4, `dim_station` 11 verified stations |
+| Dimensions | `dim_date` 4,018 days (2016–2026, Vietnam local calendar), `dim_time` 24, `dim_location` 8, `dim_source` 4, `dim_station` 11 verified stations (state on 2026-10-21 before ID 9; now `dim_source` 5 with GHCNh and `dim_station` 12 with 48823; 48816 is unverified with NULL coordinates) |
 | Calendar basis | `date_key`/`time_key` in Vietnam local time (UTC+7); `timestamp_utc` canonical |
 | Labels | `scripts/rain_labels.py`: 1 mm over `(t, t+24h]`, Open-Meteo |
 | Orchestration | Scripts run manually; only `open_meteo_ingest_to_bronze_dag` (manual) and the health-check DAG exist |
@@ -115,7 +115,7 @@ NOAA superseded the Integrated Surface Database (ISD) with **GHCNh** (Global His
 | Quality flags | Per group | Per variable (`_Quality_Code`, `_Measurement_Code`, `_Source_Code`) |
 | Phù Liễn 2024 total | 2,112 mm | 2,112 mm (identical) |
 
-**Proposed:** use GHCNh, files `https://www.ncei.noaa.gov/oa/global-historical-climatology-network/hourly/access/by-year/<YYYY>/psv/GHCNh_VMM000<WMO>_<YYYY>.psv`. GHCNh has no hourly precipitation for these stations; the usable field is the 24-hour total reported at 12 UTC (19:00 Vietnam time). Only 2024 and 2025 of GHCNh were sampled; the 10-year coverage must be measured during implementation.
+**Proposed, then decided 2026-10-21 (see the [data contract](data-contract.md#station-daily-rainfall-noaa-ghcnh)):** use GHCNh, files `https://www.ncei.noaa.gov/oa/global-historical-climatology-network/hourly/access/by-year/<YYYY>/psv/GHCNh_VMM000<WMO>_<YYYY>.psv`. GHCNh has no hourly precipitation for these stations; the usable field is the 24-hour total reported at 12 UTC (19:00 Vietnam time). Only 2024 and 2025 of GHCNh were sampled; the 10-year coverage must be measured during implementation.
 
 ### 4.2 Stations
 
@@ -130,7 +130,7 @@ NOAA superseded the Integrated Surface Database (ISD) with **GHCNh** (Global His
 
 Mapping 48825 and 48823 to research points is a station-selection change to `scripts/station_config.py` and the data contract and needs team approval. Hà Đông is currently `UNMAPPED_MISASSIGNED` because it was wrongly labelled Việt Trì, not because it is unsuitable for HAN.
 
-### 4.3 Grain and storage (Proposed, needs a contract decision)
+### 4.3 Grain and storage (proposed here; decided 2026-10-21 in the data contract and implemented in `sql/03_station_daily_rain.sql`)
 
 - New table `fact_station_daily_rain`: one source × one station × one **rain day ending 12:00 UTC**, with `rain_24h_mm`, quality code, measurement code, report type, and the window `(D-1 12:00 UTC, D 12:00 UTC]`.
 - Kept separate from `fact_weather_observation`; the hourly grain is unchanged. Add `NOAA` (already seeded in `dim_source`) or a `GHCNh` source row.
@@ -164,7 +164,7 @@ ingest_meteostat  ─┼─> transform_open_meteo_to_silver ─┐
 
 **Acceptance criteria.** A one-month run, a rerun without new rows, and a forced failure followed by a successful resume are demonstrated and logged; DAG import has no network calls; parsing alone is not accepted as evidence.
 
-**Known constraint.** The last full Gold load took 3,493 s versus 233 s earlier (not profiled). The DAG should run per year so that one slow or failed year can be retried alone.
+**Known constraint.** The last full Gold load took 292 s (DQ report `dq_report_gold_load_20261021_020704.json`; an earlier version of this line said 3,493 s, which was not supported by any run artifact; corrected 2026-10-22). The DAG should run per year so that one slow or failed year can be retried alone.
 
 ## 6. ID 8 — Bronze keeps the original payload (N1)
 

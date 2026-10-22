@@ -33,6 +33,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from build_rain_features import features_keys
+from export_rain_labels import object_exists
 from load_gold_observations import BUCKET_GOLD, get_minio_client
 from minio import Minio
 from train_cart import (
@@ -57,13 +58,7 @@ def evaluation_keys(version: str = MODEL_VERSION) -> tuple[str, str]:
 
 
 def _exists(client: Minio, key: str) -> bool:
-    try:
-        client.stat_object(BUCKET_GOLD, key)
-        return True
-    except Exception as ex:
-        if getattr(ex, "code", None) in ("NoSuchKey", "NoSuchObject"):
-            return False
-        raise
+    return object_exists(client, key)
 
 
 def read_test(client: Minio, feature_version: str) -> pd.DataFrame:

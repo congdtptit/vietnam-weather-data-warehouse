@@ -10,7 +10,7 @@ Date: 2026-10-10. Read with [business requirements](business-requirements.md) an
 4. Write code and documentation in English. Preserve `scripts/`, `dags/`, and `sql/`. Update producers and consumers together when changing a contract; migrate existing databases.
 5. Run checks appropriate to the changed behavior and update progress before reporting results. Do not expand a code/documentation task into historical downloads, volume resets, or dashboard publication.
 
-The base includes the repository, Docker runtime, locked dependencies, initial DDL, bucket initialization, Open-Meteo/example DAGs, tooling, and 21 passing local fixture tests. The complete development stack/team-machine setup, real data, and GitHub CI remain unverified. Read the limits in progress; later-stage work does not require rebuilding the base.
+The base includes the repository, Docker runtime, locked dependencies, initial DDL, bucket initialization, Open-Meteo/example DAGs, tooling, and 21 passing local fixture tests at the time (118 unit and 18 integration tests on 2026-10-22). The complete development stack/team-machine setup, real data, and GitHub CI remain unverified. Read the limits in progress; later-stage work does not require rebuilding the base.
 
 **Week 1 reconciliation:** the workbook also requires ID 4 real GeoJSON, ID 5 CDS/ERA5 requests, ID 6 an agreed Silver contract, and ID 7 an agreed label contract. Draft DDL and bucket initialization provide partial evidence for IDs 2/3; they do not establish completion of all week 1 tasks. The technical base and all week 1 deliverables have separate acceptance scopes.
 

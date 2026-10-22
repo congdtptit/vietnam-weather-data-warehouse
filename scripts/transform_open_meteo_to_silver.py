@@ -285,8 +285,13 @@ def process_open_meteo_to_silver(
     end_year: int = 2025,
     target_location: str | None = None,
     overwrite: bool = False,
+    allow_missing: bool = False,
 ) -> dict[str, Any]:
-    """Execute transformation pipeline from Open-Meteo Bronze to Silver Parquet."""
+    """Execute transformation pipeline from Open-Meteo Bronze to Silver Parquet.
+
+    A requested Bronze file that does not exist is a failure unless allow_missing is set,
+    so an incomplete ingestion cannot pass as a complete Silver run.
+    """
     client = get_minio_client()
 
     if target_location:
@@ -350,6 +355,15 @@ def process_open_meteo_to_silver(
                     print(
                         f"  [{current_task}/{total_tasks}] Year {year}: Bronze file not found: {bronze_key}"
                     )
+                    if not allow_missing:
+                        overall_dq["failures"].append(
+                            {
+                                "location_code": loc,
+                                "year": year,
+                                "stage": "missing_bronze",
+                                "error": f"requested Bronze object not found: {bronze_key}",
+                            }
+                        )
                     continue
                 else:
                     print(
@@ -529,6 +543,11 @@ if __name__ == "__main__":
         help="Canonical location code (e.g. HAN) or omit for all 8 locations",
     )
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing Silver files")
+    parser.add_argument(
+        "--allow-missing",
+        action="store_true",
+        help="Skip requested Bronze files that do not exist instead of failing",
+    )
 
     args = parser.parse_args()
 
@@ -538,11 +557,12 @@ if __name__ == "__main__":
             end_year=args.end_year,
             target_location=args.location,
             overwrite=args.overwrite,
+            allow_missing=args.allow_missing,
         )
         sys.exit(0)
     except KeyboardInterrupt:
         print("\n[!] Process interrupted by user.")
-        sys.exit(0)
+        sys.exit(130)
     except Exception as e:
         print(f"\n[!] Error: {e}", file=sys.stderr)
         sys.exit(1)

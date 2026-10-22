@@ -28,6 +28,7 @@ ORIGIN_VARIABLES = [
     "precipitation_mm",
 ]
 DERIVED_VARIABLES = ["dew_point_depression_c", "rain_past_24h_mm", "pressure_change_24h_hpa"]
+LOCAL_TZ = "Asia/Ho_Chi_Minh"  # UTC+7, no daylight saving
 
 
 def load_labels(client, bucket: str, key: str) -> pd.DataFrame:
@@ -86,8 +87,11 @@ def positive_rate_by(df: pd.DataFrame, by: list[str], split: str = "train") -> p
 
 
 def month_location_matrix(df: pd.DataFrame, split: str = "train") -> pd.DataFrame:
+    """Rain share by location and Vietnam local month of the origin (as month_local in ID 23)."""
     u = usable(df)
-    u = u[u["split"] == split].assign(month=lambda x: x["origin_utc"].dt.month)
+    u = u[u["split"] == split].assign(
+        month=lambda x: x["origin_utc"].dt.tz_convert(LOCAL_TZ).dt.month
+    )
     return u.pivot_table(
         index="location_code",
         columns="month",
@@ -146,4 +150,30 @@ def binned_positive_rate(
     cut = pd.cut(u[column], bins=bins, include_lowest=True, right=False)
     return u.groupby(cut, observed=True)["rain_next24h"].agg(
         rows="size", positive_rate=lambda s: s.astype(float).mean()
+    )
+
+
+def variable_correlation(
+    df: pd.DataFrame, columns: list[str], split: str = "train", method: str = "spearman"
+) -> pd.DataFrame:
+    """Pairwise correlation between variables on one split (train by default).
+
+    Spearman by default: rain amounts are heavily skewed and many relations are monotone
+    rather than linear. Pairs are computed on rows where both values exist.
+    """
+    u = usable(df)
+    return u.loc[u["split"] == split, columns].astype(float).corr(method=method)
+
+
+def strong_pairs(corr: pd.DataFrame, threshold: float = 0.8) -> pd.DataFrame:
+    """Variable pairs with |correlation| >= threshold, strongest first."""
+    rows = [
+        {"variable_a": a, "variable_b": b, "correlation": corr.loc[a, b]}
+        for i, a in enumerate(corr.columns)
+        for b in corr.columns[i + 1 :]
+        if abs(corr.loc[a, b]) >= threshold
+    ]
+    out = pd.DataFrame(rows, columns=["variable_a", "variable_b", "correlation"])
+    return out.reindex(out["correlation"].abs().sort_values(ascending=False).index).reset_index(
+        drop=True
     )

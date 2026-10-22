@@ -9,6 +9,8 @@ from rain_eda import (
     class_balance,
     missingness,
     month_location_matrix,
+    strong_pairs,
+    variable_correlation,
     variable_separation,
 )
 from rain_labels import assign_splits, build_rain_labels
@@ -104,3 +106,22 @@ def test_duplicate_hours_are_rejected():
     hourly = _hourly()
     with pytest.raises(ValueError, match="duplicate"):
         add_origin_variables(pd.DataFrame(), pd.concat([hourly, hourly.iloc[[0]]]))
+
+
+def test_month_matrix_uses_vietnam_local_month():
+    # Origins from 2023-11-30 17:00 UTC are already December in Vietnam (UTC+7)
+    df = _frame(_hourly("HAN", start="2023-11-29", hours=24 * 3, rain_hours=()))
+    u = df[df["exclusion_reason"].isna()]
+    late = u["origin_utc"] >= pd.Timestamp("2023-11-30 17:00", tz="UTC")
+    assert late.any() and (~late).any()
+    assert list(month_location_matrix(df).columns) == [11, 12]
+
+
+def test_correlation_is_computed_on_train_and_flags_strong_pairs():
+    df = _frame(_hourly("HAN", rain_hours=(10, 11), humid_hours=range(4, 11)))
+    cols = ["temperature_c", "pressure_hpa", "humidity_percent"]
+    corr = variable_correlation(df, cols)
+    assert list(corr.columns) == cols and np.allclose(np.diag(corr), 1.0)
+    pairs = strong_pairs(corr, 0.8)
+    assert set(pairs.columns) == {"variable_a", "variable_b", "correlation"}
+    assert (pairs["correlation"].abs() >= 0.8).all()

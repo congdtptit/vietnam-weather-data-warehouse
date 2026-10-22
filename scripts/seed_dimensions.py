@@ -226,12 +226,15 @@ def seed_dim_station(conn, minio_client: Minio) -> int:
                 info.get("longitude"),
                 info.get("elevation_m"),
                 loc_key,
+                info.get("role") if loc_key else None,
+                info.get("distance_km") if loc_key else None,
             )
         )
 
     insert_sql = """
         INSERT INTO dim_station (
-            station_id, station_name, wmo_id, latitude, longitude, elevation_m, location_key
+            station_id, station_name, wmo_id, latitude, longitude, elevation_m, location_key,
+            station_role, distance_km
         ) VALUES %s
         ON CONFLICT (station_id) DO UPDATE SET
             station_name = EXCLUDED.station_name,
@@ -239,7 +242,9 @@ def seed_dim_station(conn, minio_client: Minio) -> int:
             latitude = EXCLUDED.latitude,
             longitude = EXCLUDED.longitude,
             elevation_m = EXCLUDED.elevation_m,
-            location_key = EXCLUDED.location_key;
+            location_key = EXCLUDED.location_key,
+            station_role = EXCLUDED.station_role,
+            distance_km = EXCLUDED.distance_km;
     """
     with conn.cursor() as cur:
         execute_values(cur, insert_sql, records)

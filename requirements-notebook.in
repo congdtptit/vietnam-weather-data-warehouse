@@ -1,12 +1,13 @@
 # Analysis notebooks only (workbook IDs 21 onward); installed into .venv-notebook by
 # `make notebook-setup`. Not part of the Airflow runtime or test images.
 # Libraries shared with the pipeline are pinned to the versions in requirements.txt so the
-# notebooks compute with the same pandas/pyarrow/numpy/scikit-learn as the scripts.
+# notebooks compute with the same pandas/pyarrow/numpy/scikit-learn/joblib as the scripts.
 # (A `-c requirements.txt` constraint cannot be used: that lock targets Python 3.10 only.)
 pandas==2.1.4
 pyarrow==16.1.0
 numpy==1.26.4
 scikit-learn==1.5.1
+joblib==1.5.3  # loads the frozen model artifacts written by the pipeline image
 minio==7.2.7
 python-dotenv==1.0.1
 psycopg2-binary==2.9.9

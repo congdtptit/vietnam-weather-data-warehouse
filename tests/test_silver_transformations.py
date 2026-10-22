@@ -746,3 +746,19 @@ def test_process_meteostat_overwrite_removes_stale_silver_months(monkeypatch):
     assert "weather_hourly/year=2024/month=05/weather_hourly_meteostat_48820_202405.parquet" in (
         uploaded
     )
+
+
+def test_missing_bronze_file_fails_unless_allowed(monkeypatch):
+    import transform_open_meteo_to_silver as om_silver
+
+    client = Mock()
+    client.get_object.side_effect = S3Error("NoSuchKey", "missing", "/res", "req", "host", None)
+    client.stat_object.side_effect = S3Error("NoSuchKey", "missing", "/res", "req", "host", None)
+    monkeypatch.setattr(om_silver, "get_minio_client", lambda: client)
+
+    with pytest.raises(RuntimeError, match="encountered 1 failure"):
+        om_silver.process_open_meteo_to_silver(2024, 2024, target_location="HAN")
+    result = om_silver.process_open_meteo_to_silver(
+        2024, 2024, target_location="HAN", allow_missing=True
+    )
+    assert result["failures"] == [] and result["total_files_transformed"] == 0

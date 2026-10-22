@@ -30,6 +30,32 @@ LABEL_SOURCE = "Open-Meteo"
 DATASET_VERSION = "v2"  # v2: labels rain_next24h_v0.2.1 (float-sum fix); v1 kept for model v1
 
 
+def object_exists(client: Minio, key: str, bucket: str = BUCKET_GOLD) -> bool:
+    try:
+        client.stat_object(bucket, key)
+        return True
+    except Exception as ex:
+        if getattr(ex, "code", None) in ("NoSuchKey", "NoSuchObject"):
+            return False
+        raise
+
+
+def refuse_overwrite(client: Minio, keys: list[str], overwrite: bool = False) -> None:
+    """Refuse to replace published Gold ML objects unless the caller asks explicitly.
+
+    Versioned datasets and models are referenced by later steps (features, model reports,
+    test evaluations, dim_model), so a silent rewrite under the same tag breaks lineage.
+    """
+    if overwrite:
+        return
+    existing = [k for k in keys if object_exists(client, k)]
+    if existing:
+        raise RuntimeError(
+            f"{', '.join(existing)} already exist; use a new --version, or pass --overwrite "
+            "only if nothing downstream uses this version"
+        )
+
+
 def labels_keys(version: str = DATASET_VERSION) -> tuple[str, str]:
     base = f"ml_labels/rain_next24h_labels_{version}"
     return f"{base}.parquet", f"{base}.json"
@@ -109,13 +135,15 @@ def export_labels(
     threshold_mm: float = DEFAULT_THRESHOLD_MM,
     version: str = DATASET_VERSION,
     client: Minio | None = None,
+    overwrite: bool = False,
 ) -> dict[str, Any]:
     client = client or get_minio_client()
+    parquet_key, manifest_key = labels_keys(version)
+    refuse_overwrite(client, [parquet_key, manifest_key], overwrite)
     hourly = read_open_meteo_silver(client, start_year, end_year)
     labels = assign_splits(build_rain_labels(hourly, threshold_mm=threshold_mm))
     labels.insert(0, "label_source", LABEL_SOURCE)
 
-    parquet_key, manifest_key = labels_keys(version)
     buf = io.BytesIO()
     labels.to_parquet(buf, index=False, engine="pyarrow", compression="snappy")
     data = buf.getvalue()
@@ -158,9 +186,18 @@ def main() -> int:
     parser.add_argument("--end-year", type=int, required=True, help="Last year (inclusive)")
     parser.add_argument("--threshold-mm", type=float, default=DEFAULT_THRESHOLD_MM)
     parser.add_argument("--version", default=DATASET_VERSION, help="Dataset version tag")
+    parser.add_argument(
+        "--overwrite", action="store_true", help="Replace an existing dataset of this version"
+    )
     args = parser.parse_args()
     try:
-        export_labels(args.start_year, args.end_year, args.threshold_mm, args.version)
+        export_labels(
+            args.start_year,
+            args.end_year,
+            args.threshold_mm,
+            args.version,
+            overwrite=args.overwrite,
+        )
     except (RuntimeError, ValueError) as ex:
         print(f"[!] {ex}")
         return 1

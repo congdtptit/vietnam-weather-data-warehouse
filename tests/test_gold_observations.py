@@ -19,6 +19,7 @@ from load_gold_observations import (
     process_month_observations,
     save_gold_parquet,
 )
+from station_config import CANONICAL_LOCATIONS
 
 
 def test_vietnam_local_calendar_basis_and_day_boundary():
@@ -85,7 +86,7 @@ def test_vietnam_local_calendar_basis_and_day_boundary():
     assert row["time_key"] == 0
     assert row["location_key"] == 1
     assert row["source_key"] == 1
-    assert row["station_key"] is None
+    assert pd.isna(row["station_key"])  # grid source: no station
 
 
 def test_canonical_location_filtering_excludes_unmapped():
@@ -213,3 +214,78 @@ def test_clean_row_value_types():
     assert clean_row_value(np.float64(24.5678)) == 24.57
     assert clean_row_value(np.int64(20240501)) == 20240501
     assert clean_row_value("string") == "string"
+
+
+def _listing(*names):
+    return [Mock(object_name=n) for n in names]
+
+
+def test_retraction_scope_comes_from_the_request_not_the_incoming_rows():
+    from load_gold_observations import retraction_scope
+
+    loc_map = {code: i for i, code in enumerate(sorted(CANONICAL_LOCATIONS), start=1)}
+    source_map = {"Open-Meteo": 1, "ERA5": 2, "Meteostat": 3, "NOAA": 4, "GHCNh": 5}
+    sources, locations = retraction_scope(loc_map, source_map)
+    assert sources == [1, 3]  # Meteostat stays in scope even in a month without its rows
+    assert locations == list(range(1, 9))
+    assert retraction_scope(loc_map, source_map, "han")[1] == [loc_map["HAN"]]
+
+
+def test_missing_open_meteo_location_object_is_reported():
+    from load_gold_observations import missing_open_meteo_objects, open_meteo_silver_key
+
+    present = [open_meteo_silver_key(c, 2024, 6) for c in sorted(CANONICAL_LOCATIONS) if c != "PTO"]
+    client = Mock()
+    client.list_objects.return_value = _listing(
+        *present, "weather_hourly/year=2024/month=06/weather_hourly_meteostat_48820_202406.parquet"
+    )
+    missing = missing_open_meteo_objects(client, 2024, 6, sorted(CANONICAL_LOCATIONS))
+    assert missing == [open_meteo_silver_key("PTO", 2024, 6)]
+
+
+def test_pipeline_fails_the_month_instead_of_retracting_a_missing_location(monkeypatch):
+    import load_gold_observations as gold
+
+    loc_map = {code: i for i, code in enumerate(sorted(CANONICAL_LOCATIONS), start=1)}
+    client = Mock()
+    client.list_objects.return_value = _listing(gold.open_meteo_silver_key("HAN", 2024, 1))
+    load = Mock()
+    monkeypatch.setattr(gold, "get_minio_client", lambda: client)
+    monkeypatch.setattr(gold, "get_db_connection", Mock)
+    monkeypatch.setattr(
+        gold, "load_dimension_lookups", lambda conn: (loc_map, {"Open-Meteo": 1}, {})
+    )
+    monkeypatch.setattr(gold, "load_dwh_fact_observations", load)
+    try:
+        gold.run_gold_pipeline(2024, 2024)
+    except RuntimeError as ex:
+        assert "12 failure" in str(ex)
+    else:
+        raise AssertionError("missing Silver objects must fail the run")
+    load.assert_not_called()
+
+
+def test_gold_station_key_is_a_nullable_integer():
+    df_silver = pd.DataFrame(
+        {
+            "source_name": ["Meteostat", "Open-Meteo"],
+            "location_code": ["HAN", "HAN"],
+            "station_id": ["48820", None],
+            "timestamp_utc": [pd.Timestamp("2024-05-01 00:00", tz="UTC")] * 2,
+            "temperature_c": [28.0, 27.0],
+        }
+    )
+    buf = io.BytesIO()
+    df_silver.to_parquet(buf, index=False)
+    body = buf.getvalue()
+    client = Mock()
+    client.list_objects.return_value = _listing(
+        "weather_hourly/year=2024/month=05/weather_hourly_HAN_202405.parquet"
+    )
+    client.get_object.return_value = Mock(read=lambda: body)
+    df = process_month_observations(
+        client, 2024, 5, {"HAN": 1}, {"Open-Meteo": 1, "Meteostat": 3}, {"48820": 7}
+    )
+    assert str(df["station_key"].dtype) == "Int64"
+    keys = df.set_index("source_name")["station_key"]
+    assert keys["Meteostat"] == 7 and pd.isna(keys["Open-Meteo"])

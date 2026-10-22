@@ -58,6 +58,7 @@ services:
       - ./sql/02_olap_views.sql:/docker-entrypoint-initdb.d/schema/02_olap_views.sql
       - ./sql/03_station_daily_rain.sql:/docker-entrypoint-initdb.d/schema/03_station_daily_rain.sql
       - ./sql/04_predictions.sql:/docker-entrypoint-initdb.d/schema/04_predictions.sql
+      - ./sql/05_metadata_corrections.sql:/docker-entrypoint-initdb.d/schema/05_metadata_corrections.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-airflow}"]
       interval: 5s

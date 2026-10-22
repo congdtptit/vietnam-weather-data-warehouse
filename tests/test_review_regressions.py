@@ -914,3 +914,65 @@ def test_rereview_retracted_silver_row_removed_from_gold_and_dw(minio_client, pg
     assert ("PTO", "2024-09-01T16:00:00Z") in dw_keys
     # HAN@17:00 must be retracted
     assert ("HAN", "2024-09-01T17:00:00Z") not in dw_keys
+
+
+@pytest.mark.integration
+def test_source_missing_from_silver_is_retracted_from_dw(pg_connection):
+    """A month reloaded without Meteostat rows removes the Meteostat rows already in the DW."""
+    from datetime import datetime as dt
+    from datetime import timezone as tz
+
+    with pg_connection.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO dim_date (
+                date_key, full_date, day_of_week, day_name, day_of_month,
+                month, month_name, quarter, year, is_weekend, is_rainy_season
+            ) VALUES (20240803, '2024-08-03', 6, 'Thứ Bảy', 3, 8, 'Tháng 8', 3, 2024, true, true)
+            ON CONFLICT (date_key) DO NOTHING;
+            """
+        )
+    pg_connection.commit()
+    loc_map, source_map, _ = gold_obs.load_dimension_lookups(pg_connection)
+
+    def row(source):
+        return {
+            "date_key": 20240803,
+            "time_key": 700,
+            "location_key": loc_map["HAN"],
+            "source_key": source_map[source],
+            "station_key": None,
+            "location_code": "HAN",
+            "source_name": source,
+            "timestamp_utc": pd.Timestamp("2024-08-03 00:00:00", tz="UTC"),
+            "timestamp_local": pd.Timestamp("2024-08-03 07:00:00"),
+            "temperature_c": 30.0,
+            "humidity_percent": 75.0,
+            "precipitation_mm": None,
+            "wind_speed_ms": 2.0,
+            "wind_direction_deg": 90.0,
+            "pressure_hpa": 1005.0,
+            "cloud_cover_percent": None,
+            "solar_radiation_wm2": None,
+        }
+
+    sources, locations = gold_obs.retraction_scope(loc_map, source_map)
+    scope = {
+        "source_keys": sources,
+        "location_keys": locations,
+        "month_start_utc": dt(2024, 8, 1, tzinfo=tz.utc),
+        "next_month_start_utc": dt(2024, 9, 1, tzinfo=tz.utc),
+    }
+    both = pd.DataFrame([row("Open-Meteo"), row("Meteostat")])
+    gold_obs.load_dwh_fact_observations(pg_connection, both, **scope)
+    gold_obs.load_dwh_fact_observations(pg_connection, both.iloc[:1], **scope)
+
+    with pg_connection.cursor() as cur:
+        cur.execute(
+            """
+            SELECT s.source_name FROM fact_weather_observation f
+            JOIN dim_source s USING (source_key)
+            WHERE f.timestamp_utc >= '2024-08-01T00:00:00Z' AND f.timestamp_utc < '2024-09-01T00:00:00Z'
+            """
+        )
+        assert [r[0] for r in cur.fetchall()] == ["Open-Meteo"]

@@ -57,7 +57,7 @@ flowchart TD
 
 ## 2. General Conventions
 
-This document owns paths. Columns/units belong to the [data contract](data-contract.md); grain/keys to [warehouse schema](warehouse-schema.md); labels to [rain label](rain-label.md). Coordinates/stations below are initial references, not evidence of verified station metadata or current boundaries.
+This document owns paths. Columns/units belong to the [data contract](data-contract.md); grain/keys to [warehouse schema](warehouse-schema.md); labels to [rain label](rain-label.md). Station identities in §6 were verified on 2026-10-21 (Nội Bài identity of 48820 on 2026-10-22); research point coordinates are references, not boundaries.
 
 Path `bronze/open_meteo/...` consists of bucket `bronze` and object key `open_meteo/...`. Pass these separately to MinIO; do not repeat the bucket name inside the key.
 
@@ -105,7 +105,7 @@ Monthly examples apply to monthly requests. Current Open-Meteo ingestion downloa
 |---|---|---|---|
 | **Open-Meteo** | `.json` | `open_meteo/hourly/year=YYYY/month=MM/open_meteo_<location>_hourly_<start_date>_<end_date>.json` | `bronze/open_meteo/hourly/year=2024/month=05/open_meteo_HAN_hourly_20240501_20240531.json` |
 | **ERA5 / ERA5-Land** | `.nc` | `era5/reanalysis/year=YYYY/month=MM/era5_north_vietnam_hourly_<YYYYMM>.nc` | `bronze/era5/reanalysis/year=2024/month=05/era5_north_vietnam_hourly_202405.nc` |
-| **Meteostat** | `.csv` | `meteostat/station_hourly/year=YYYY/meteostat_station_<station_id>_hourly_<YYYY>.csv` | `bronze/meteostat/station_hourly/year=2024/meteostat_station_48820_hourly_2024.csv` |
+| **Meteostat** | `.csv` | `meteostat/station_hourly/year=YYYY/meteostat_station_<station_id>_hourly_<YYYY>.csv` (the downloaded `.csv.gz` is stored decompressed, without a manifest or checksum; a known gap) | `bronze/meteostat/station_hourly/year=2024/meteostat_station_48820_hourly_2024.csv` |
 | **NOAA ISD** (not used; superseded by GHCNh) | `.csv` / `.txt` | `noaa/station_hourly/year=YYYY/noaa_station_<station_id>_hourly_<YYYY>.csv` | `bronze/noaa/station_hourly/year=2024/noaa_station_488200_hourly_2024.csv` |
 | **NOAA GHCNh** (implemented) | `.psv` + `.json` manifest | `ghcnh/station_hourly/year=YYYY/GHCNh_VMM000<wmo>_<YYYY>.psv`; manifest `ghcnh/manifests/year=YYYY/GHCNh_VMM000<wmo>_<YYYY>.json` | `bronze/ghcnh/station_hourly/year=2024/GHCNh_VMM00048826_2024.psv` |
 | **Boundary maps** | `.geojson` | `spatial/boundaries/<name>_<version>.geojson` | `bronze/spatial/boundaries/vietnam_northern_provinces_v1.geojson` |
@@ -127,7 +127,14 @@ Monthly examples apply to monthly requests. Current Open-Meteo ingestion downloa
 silver/weather_hourly/year=YYYY/month=MM/weather_hourly_<location>_<YYYYMM>.parquet
 ```
 
-The pattern above covers combined-source files or samples, retaining `source_name` on every row. For separate source files, proposed key `weather_hourly/source=<source>/year=YYYY/month=MM/weather_hourly_<LOCATION>_<YYYYMM>.parquet` prevents overwrites. Real Silver ETL is not implemented; agree the strategy and update producers/consumers before adopting the new pattern.
+The pattern above is the Open-Meteo Silver key (one file per location-month, `source_name` on every row). Implemented keys for the other sources:
+
+| Source | Silver key |
+| --- | --- |
+| Meteostat (hourly) | `weather_hourly/year=YYYY/month=MM/weather_hourly_meteostat_<station_id>_<YYYYMM>.parquet` (same prefix as Open-Meteo; the Gold loader reads both) |
+| GHCNh (daily rain) | `ghcnh/station_daily_rain/year=YYYY/ghcnh_daily_rain_<wmo>_<YYYY>.parquet`; rejected rows `ghcnh/quarantine/year=YYYY/ghcnh_daily_rain_<wmo>_<YYYY>_quarantine.parquet` |
+
+The key `weather_hourly/source=<source>/...` proposed earlier was not adopted.
 
 - **Examples**:
   * Hourly Hanoi weather:
@@ -164,7 +171,7 @@ The pattern above covers combined-source files or samples, retaining `source_nam
 | **ML labels (implemented)** | `ml_labels/rain_next24h_labels_<version>.parquet` + `.json` manifest | `gold/ml_labels/rain_next24h_labels_v2.parquet` (current, labels `rain_next24h_v0.2.1`); `_v1` kept for model v1 |
 | **ML Dataset (CART, implemented)** | `ml_features/cart_rain_<split tag>_<version>.parquet` (split tags `train_2016_2023`, `val_2024`, `test_2025`) + `ml_features/cart_rain_features_<version>.json` manifest | `gold/ml_features/cart_rain_train_2016_2023_v2.parquet`<br>`gold/ml_features/cart_rain_val_2024_v2.parquet`<br>`gold/ml_features/cart_rain_test_2025_v2.parquet` (current; `_v1` kept for model v1) |
 | **CART model (implemented)** | `ml_models/cart_rain_next24h_<version>/model.joblib` + `report.json`; after the one-time test evaluation also `test_evaluation.json` + `test_predictions.parquet`, and `test_evaluation_corrected_labels.json` after the 2026-10-22 label fix | `gold/ml_models/cart_rain_next24h_v1/model.joblib` |
-| **Model predictions** | `predictions/year=YYYY/month=MM/rain_predictions_cart_<YYYYMMDD>.parquet` | `gold/predictions/year=2024/month=05/rain_predictions_cart_20240501.parquet` |
+| **Model predictions** (target for the ID 32 scoring DAG; not used yet) | `predictions/year=YYYY/month=MM/rain_predictions_cart_<YYYYMMDD>.parquet` | `gold/predictions/year=2024/month=05/rain_predictions_cart_20240501.parquet`. Test 2025 predictions of CART v1 are in `ml_models/cart_rain_next24h_v1/test_predictions.parquet` |
 
 ---
 
@@ -174,7 +181,7 @@ Latitude/longitude/elevation are the research point used for gridded sources. Re
 
 | Location code (`location_code`) | Location name | Latitude (`latitude`) | Longitude (`longitude`) | Estimated elevation (`elevation_m`) | Reference WMO station (verified) |
 |:---:|---|:---:|:---:|:---:|:---:|
-| **HAN** | Hà Nội | 21.0285 | 105.8542 | 10 m | 48820 (Meteostat "Ha Noi"; NOAA ISD names it Nội Bài) |
+| **HAN** | Hà Nội | 21.0285 | 105.8542 | 10 m | 48820: Meteostat "Ha Noi", observations from Nội Bài airport (ISD 488200, METAR VVNB), 22.0 km away, role `nearest_available` |
 | **PTO** | Phú Thọ | 21.3986 | 105.2280 | 25 m | None verified |
 | **TNG** | Thái Nguyên | 21.5942 | 105.8482 | 35 m | 48831 (not served by Meteostat) |
 | **TUQ** | Tuyên Quang | 21.8236 | 105.2153 | 50 m | None verified |

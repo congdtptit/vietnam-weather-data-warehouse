@@ -2,7 +2,8 @@
 """scripts/load_predictions.py.
 
 Load the CART RainNext24h model and its test 2025 predictions into the DW (workbook ID 31).
-Requires sql/04_predictions.sql and seeded dim_date/dim_time/dim_location.
+Requires sql/04_predictions.sql, sql/05_metadata_corrections.sql, and seeded
+dim_date/dim_time/dim_location.
 
 Inputs (bucket gold, from IDs 28-29):
   ml_models/cart_rain_next24h_<version>/report.json, test_evaluation.json,
@@ -40,8 +41,11 @@ MODEL_UPSERT_SQL = """
         model_name, model_version, algorithm, label_version, label_source, feature_version,
         feature_source, label_threshold_mm, probability_threshold, horizon_hours,
         train_start_utc, train_end_utc, hyperparameters, artifact_uri, artifact_sha256,
-        validation_f1, test_precision, test_recall, test_f1, availability_note
-    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        validation_f1, test_precision, test_recall, test_f1, availability_note,
+        evaluation_label_version, validation_f1_evaluation_labels
+    ) VALUES (
+        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+    )
     ON CONFLICT (model_name, model_version) DO UPDATE SET
         algorithm = EXCLUDED.algorithm,
         label_version = EXCLUDED.label_version,
@@ -60,7 +64,9 @@ MODEL_UPSERT_SQL = """
         test_precision = EXCLUDED.test_precision,
         test_recall = EXCLUDED.test_recall,
         test_f1 = EXCLUDED.test_f1,
-        availability_note = EXCLUDED.availability_note
+        availability_note = EXCLUDED.availability_note,
+        evaluation_label_version = EXCLUDED.evaluation_label_version,
+        validation_f1_evaluation_labels = EXCLUDED.validation_f1_evaluation_labels
     RETURNING model_key;
 """
 
@@ -98,13 +104,22 @@ RETRACT_SQL = """
 
 
 def model_row(report: dict[str, Any], evaluation: dict[str, Any]) -> tuple[Any, ...]:
-    """dim_model values from the ID 28 report and the ID 29 evaluation."""
+    """dim_model values from the ID 28 report and the ID 29 evaluation.
+
+    label_version/validation_f1 describe selection (training labels). When the evaluation is
+    the corrected-label re-score, the test metrics were measured on other labels; that label
+    version and the validation F1 on it are stored next to them (sql/05).
+    """
     if evaluation["model_version"] != report["model_version"]:
         raise ValueError("report and evaluation belong to different model versions")
     if float(evaluation["probability_threshold"]) != float(report["probability_threshold"]):
         raise ValueError("evaluation threshold differs from the frozen report threshold")
     train_start, train_end = report["train_window_utc"]
     test = evaluation["test_metrics_at_threshold"]
+    validation_on_eval_labels = evaluation.get(
+        "validation_metrics_at_threshold_corrected_labels",
+        report["validation_metrics_at_threshold"],
+    )
     return (
         report["model_name"],
         report["model_version"],
@@ -126,6 +141,8 @@ def model_row(report: dict[str, Any], evaluation: dict[str, Any]) -> tuple[Any, 
         round(float(test["recall"]), 4),
         round(float(test["f1"]), 4),
         report["availability"],
+        evaluation.get("label_version", report["label_version"]),
+        round(float(validation_on_eval_labels["f1"]), 4),
     )
 
 
