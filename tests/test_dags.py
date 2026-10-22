@@ -47,12 +47,13 @@ def test_pipeline_dag_order_and_settings(dag_bag):
     down = {t.task_id: t.downstream_task_ids for t in dag.tasks}
     assert down["validate_window"] == {"ingest_open_meteo", "ingest_meteostat", "ingest_ghcnh"}
     assert down["ingest_ghcnh"] == {"transform_ghcnh_to_silver"}
-    assert down["transform_ghcnh_to_silver"] == {"seed_dimensions"}
+    assert down["transform_ghcnh_to_silver"] == {"quality_gate"}
+    assert down["quality_gate"] == {"seed_dimensions"}
     assert down["load_station_daily_rain"] == {"reconcile"}
     assert down["ingest_open_meteo"] == {"transform_open_meteo_to_silver"}
     assert down["ingest_meteostat"] == {"transform_meteostat_to_silver"}
-    assert down["transform_open_meteo_to_silver"] == {"seed_dimensions"}
-    assert down["transform_meteostat_to_silver"] == {"seed_dimensions"}
+    assert down["transform_open_meteo_to_silver"] == {"quality_gate"}
+    assert down["transform_meteostat_to_silver"] == {"quality_gate"}
     assert down["seed_dimensions"] == {"load_gold_observations", "load_station_daily_rain"}
     assert down["load_gold_observations"] == {"reconcile"}
     assert down["reconcile"] == set()
@@ -72,6 +73,7 @@ def test_pipeline_commands_render_the_window(dag_bag, params, expected):
     for task_id in (
         "ingest_open_meteo",
         "ingest_ghcnh",
+        "quality_gate",
         "load_gold_observations",
         "load_station_daily_rain",
         "reconcile",
@@ -91,3 +93,11 @@ def test_pipeline_rejects_windows_outside_scope(dag_bag, start, end):
     task = dag_bag.dags["weather_bronze_to_dw_dag"].get_task("validate_window")
     with pytest.raises(ValueError, match="outside"):
         task.python_callable(params={"start_year": start, "end_year": end, "location": ""})
+
+
+def test_every_dw_writing_task_waits_for_the_quality_gate(dag_bag):
+    dag = dag_bag.dags["weather_bronze_to_dw_dag"]
+    for task_id in ("seed_dimensions", "load_gold_observations", "load_station_daily_rain"):
+        task = dag.get_task(task_id)
+        assert "quality_gate" in task.get_flat_relative_ids(upstream=True)
+        assert task.trigger_rule == "all_success"

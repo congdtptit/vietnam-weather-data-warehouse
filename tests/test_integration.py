@@ -1,4 +1,5 @@
 import importlib
+import io
 import json
 from pathlib import Path
 from unittest.mock import Mock
@@ -120,3 +121,56 @@ def test_station_foreign_key(pg_connection):
 
 def test_postgres_health_task(pg_connection):
     importlib.import_module("weather_pipeline_health_dag").check_postgres_dwh_connection()
+
+
+def _put_silver(minio_client, objects):
+    for key, body in objects.items():
+        minio_client.put_object("silver", key, io.BytesIO(body), len(body))
+
+
+def test_quality_gate_task_fails_in_airflow_on_bad_silver(minio_client, dag_bag):
+    """The DAG's own `quality_gate` command, run by a BashOperator against a real MinIO."""
+    import pandas as pd
+    from airflow.exceptions import AirflowException
+    from airflow.operators.bash import BashOperator
+    from test_quality_gate import OM_KEY, _hourly, _silver
+
+    scripts = Path(__file__).resolve().parents[1] / "scripts"
+    gate = dag_bag.dags["weather_bronze_to_dw_dag"].get_task("quality_gate")
+    params = {"start_year": 2024, "end_year": 2024, "location": "HAN"}
+    command = gate.render_template(gate.bash_command, {"params": params})
+    command = command.replace("/opt/airflow/scripts", str(scripts))
+
+    def run():
+        BashOperator(task_id="quality_gate_probe", bash_command=command).execute(context={})
+
+    def reports():
+        return {
+            o.object_name
+            for o in minio_client.list_objects("silver", prefix="quality_reports/", recursive=True)
+        }
+
+    _put_silver(minio_client, _silver())
+    before = reports()
+    run()  # complete synthetic Silver: exit 0
+    assert len(reports() - before) == 1
+
+    bad = _hourly("Open-Meteo", 1)
+    bad.loc[3, "humidity_percent"] = 150.0
+    buf = io.BytesIO()
+    bad.to_parquet(buf)
+    _put_silver(minio_client, {OM_KEY.format(m=1): buf.getvalue()})
+    before = reports()
+    with pytest.raises(AirflowException, match="exit code 1"):
+        run()
+    (key,) = reports() - before
+    resp = minio_client.get_object("silver", key)
+    try:
+        report = json.loads(resp.read())
+    finally:
+        resp.close()
+        resp.release_conn()
+    failed = [c for c in report["checks"] if c["status"] == "FAIL"]
+    assert not report["passed"] and [c["check_id"] for c in failed] == ["H06_valid_ranges"]
+    assert failed[0]["violations"] == {"out_of_range_humidity": 1}
+    assert pd.Timestamp(report["checked_at_utc"]).tzinfo is not None

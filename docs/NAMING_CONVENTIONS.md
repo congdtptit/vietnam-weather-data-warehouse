@@ -147,6 +147,7 @@ The key `weather_hourly/source=<source>/...` proposed earlier was not adopted.
   * Data quality reports:
     `silver/quality_reports/dq_report_20240501.json`
   * DW reconciliation reports (ID 17): `gold/quality_reports/reconcile_<start>_<end>[_<LOCATION>]_<YYYYMMDDTHHMMSSZ>.json`
+  * Silver quality-gate reports (ID 24): `silver/quality_reports/quality_gate_<start>_<end>[_<LOCATION>]_<YYYYMMDDTHHMMSSZ>.json`
 
 ---
 

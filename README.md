@@ -12,7 +12,7 @@ Cập nhật ngày **2026-10-22**. Bằng chứng chi tiết (lệnh đã chạy
 
 - Docker Compose cho MinIO, PostgreSQL và Airflow (đã kiểm chứng webserver, scheduler và một lần chạy DAG kiểm tra ngày 22/10); Dockerfile Airflow 2.9.3/Python 3.10 với dependency được khóa phiên bản và checksum.
 - Khởi tạo bucket Bronze/Silver/Gold, DDL Star Schema và seed dimension; danh mục trạm đã xác minh trong `scripts/station_config.py`.
-- ETL bằng script: Open-Meteo và Meteostat → Bronze → Silver → Gold → `fact_weather_observation`. Meteostat chỉ giữ giá trị quan trắc (loại giá trị mô hình dự báo). DAG `weather_bronze_to_dw_dag` (task 17) chạy trọn Bronze → Silver → Gold → DW theo năm cho Open-Meteo, Meteostat và mưa ngày GHCNh, rồi đối chiếu số dòng DW với Silver; đã chạy cho cả 2016–2025 (khớp 788.861 dòng giờ và 17.866 ngày mưa); chạy tay, chưa có lịch tăng dần (task 25).
+- ETL bằng script: Open-Meteo và Meteostat → Bronze → Silver → Gold → `fact_weather_observation`. Meteostat chỉ giữ giá trị quan trắc (loại giá trị mô hình dự báo). DAG `weather_bronze_to_dw_dag` (task 17) chạy trọn Bronze → Silver → Gold → DW theo năm cho Open-Meteo, Meteostat và mưa ngày GHCNh, có bước kiểm tra chất lượng Silver chặn trước khi ghi DW (task 24: dừng khi sai khóa, trùng, UTC, khoảng giá trị hợp lệ hoặc thiếu giờ Open-Meteo; cảnh báo không dừng khi độ phủ, % thiếu hoặc giá trị bất thường vượt ngưỡng đã chốt ngày 22/10), rồi đối chiếu số dòng DW với Silver; đã chạy cho cả 2016–2025 (khớp 788.861 dòng giờ và 17.866 ngày mưa); chạy tay, chưa có lịch tăng dần (task 25).
 - Địa giới 63 tỉnh trước sáp nhập (GeoJSON, geoBoundaries) trong Bronze kèm manifest; bản 25 tỉnh miền Bắc trong Silver, đã kiểm tra 8 điểm nằm đúng tỉnh (`scripts/ingest_boundaries.py`).
 - Bronze Open-Meteo lưu nguyên bytes nhận về kèm manifest (SHA-256, độ phủ, tọa độ lưới) cho cả 80 file; ERA5 (NetCDF, Copernicus CDS) có script tải theo tháng kèm manifest, tháng 1/2024 đã có, các tháng còn lại của 2016–2025 đang tải (`scripts/ingest_era5.py`).
 - Mưa ngày tại trạm từ NOAA GHCNh (5 trạm) → bảng riêng `fact_station_daily_rain`, kèm view so sánh với Open-Meteo.
@@ -176,6 +176,7 @@ Test_DL_weather/
 │   ├── transform_*_to_silver.py   # Open-Meteo, Meteostat, GHCNh → Silver
 │   ├── load_gold_observations.py, load_station_daily_rain.py
 │   ├── quality_checks.py
+│   ├── quality_gate.py            # Kiểm tra chất lượng Silver trước khi nạp DW (task 24)
 │   ├── rain_labels.py, export_rain_labels.py, rain_eda.py, build_rain_features.py, train_cart.py, evaluate_cart_test.py, rescore_cart_corrected_labels.py, cart_rules.py
 │   ├── ingest_boundaries.py       # Địa giới GeoJSON → Bronze/Silver
 │   ├── ingest_era5.py             # ERA5 NetCDF (CDS) → Bronze
