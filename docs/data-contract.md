@@ -36,6 +36,20 @@ Decided 2026-10-21 (workbook ID 9; specification in [task specifications §4](ta
 | DW | `fact_station_daily_rain` and `vw_rain_station_vs_model` (`sql/03_station_daily_rain.sql`); the view compares with Open-Meteo summed over the same UTC window and requires 24 model hours |
 | Use | Station-versus-model comparison in BI and reports. Not used for the hourly RainNext24h label |
 
+## Province boundaries (GeoJSON)
+
+Implemented 2026-10-22 (workbook ID 4; decision and source review in [task specifications §7](task-specs-weeks-2-5.md#7-id-4--real-boundary-geojson-n2-week-1-backlog)). Boundaries describe provinces; they never change the research points, which stay coordinates.
+
+| Item | Contract |
+| --- | --- |
+| Basis | Pre-merger provinces (63, before 2025-07-01), decided 2026-10-21 |
+| Source | geoBoundaries gbOpen VNM ADM1, release commit `9469f09592ced973a3448cf66b6100b741b64c0d`; boundary year 2008; source "geoBoundaries, Wikipedia". License: public domain per geoBoundaries metadata, ODbL per HDX; attribute geoBoundaries and Wikimedia Commons |
+| Bronze | The received GeoJSON unchanged (64 units, CRS84) plus a JSON manifest: URLs, commit, source metadata, license note, CRS, feature count, bytes, SHA-256, retrieval time. A rerun with identical bytes does not rewrite it; different bytes are refused without `--overwrite` |
+| Silver | `northern_provinces_pre2025_v1.geojson`: the 25 northern provinces of the Red River Delta (Decision 368/QĐ-TTg) and Northern Midlands and Mountains (Decision 369/QĐ-TTg) regions, both of 2024-05-04. Properties `province_name` (NFC, trimmed; the source has a trailing tab in "Hà Nội"), `region`, `shape_iso`, `source_shape_id`, `location_code` and `has_observations` (true for the 8 provinces with a research point). Geometry is copied unchanged. The other 17 northern provinces are a map background without data |
+| Checks (all must pass before publishing) | FeatureCollection in CRS84; 64 units with unique names, 63 provinces plus Côn Đảo; every geometry valid; all 25 northern provinces present; each research point inside exactly one province, equal to its `dim_location.province`. A changed upstream build (metadata pointing to another commit) stops the run |
+| DW | No change: `dim_location.province` already holds the pre-merger names |
+| Limits | Coarse geometry (mean 246 vertices per unit; the Lào Cai point is about 0.022° from the border); not an official government boundary; changes after 2008 not checked. Power BI Shape Map needs TopoJSON, which is a task 27 conversion |
+
 ## Grain, identifiers, and time
 
 - Target Silver observations are unique by `(source_name, location_code, timestamp_utc)`. Source names map consistently to `DimSource`. Raw station data may have another grain before station selection/aggregation.

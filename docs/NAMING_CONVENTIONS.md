@@ -108,7 +108,7 @@ Monthly examples apply to monthly requests. Current Open-Meteo ingestion downloa
 | **Meteostat** | `.csv` | `meteostat/station_hourly/year=YYYY/meteostat_station_<station_id>_hourly_<YYYY>.csv` (the downloaded `.csv.gz` is stored decompressed, without a manifest or checksum; a known gap) | `bronze/meteostat/station_hourly/year=2024/meteostat_station_48820_hourly_2024.csv` |
 | **NOAA ISD** (not used; superseded by GHCNh) | `.csv` / `.txt` | `noaa/station_hourly/year=YYYY/noaa_station_<station_id>_hourly_<YYYY>.csv` | `bronze/noaa/station_hourly/year=2024/noaa_station_488200_hourly_2024.csv` |
 | **NOAA GHCNh** (implemented) | `.psv` + `.json` manifest | `ghcnh/station_hourly/year=YYYY/GHCNh_VMM000<wmo>_<YYYY>.psv`; manifest `ghcnh/manifests/year=YYYY/GHCNh_VMM000<wmo>_<YYYY>.json` | `bronze/ghcnh/station_hourly/year=2024/GHCNh_VMM00048826_2024.psv` |
-| **Boundary maps** | `.geojson` | `spatial/boundaries/<name>_<version>.geojson` | `bronze/spatial/boundaries/vietnam_northern_provinces_v1.geojson` |
+| **Boundary maps** (implemented) | `.geojson` + `.json` manifest | `spatial/boundaries/<name>_<version>.geojson`; manifest `spatial/manifests/<name>_<version>.json` | `bronze/spatial/boundaries/vnm_adm1_pre2025_geoboundaries_9469f09.geojson` (version = source release commit) |
 
 ---
 
@@ -132,6 +132,7 @@ The pattern above is the Open-Meteo Silver key (one file per location-month, `so
 | Source | Silver key |
 | --- | --- |
 | Meteostat (hourly) | `weather_hourly/year=YYYY/month=MM/weather_hourly_meteostat_<station_id>_<YYYYMM>.parquet` (same prefix as Open-Meteo; the Gold loader reads both) |
+| Province boundaries | `spatial/boundaries/northern_provinces_pre2025_<version>.geojson` (25 northern provinces, version `v1`) and the check report `spatial/boundaries/northern_provinces_pre2025_<version>.json` |
 | GHCNh (daily rain) | `ghcnh/station_daily_rain/year=YYYY/ghcnh_daily_rain_<wmo>_<YYYY>.parquet`; rejected rows `ghcnh/quarantine/year=YYYY/ghcnh_daily_rain_<wmo>_<YYYY>_quarantine.parquet` |
 
 The key `weather_hourly/source=<source>/...` proposed earlier was not adopted.

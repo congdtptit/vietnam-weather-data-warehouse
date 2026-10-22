@@ -32,7 +32,7 @@ The DDL does not seed `dim_date`/`dim_station`. `dim_model` and the prediction k
 | --- | --- | --- |
 | Calendar basis | Resolved: Vietnam Local Time (`Asia/Ho_Chi_Minh`, UTC+7) | `date_key` (YYYYMMDD) and `time_key` (HH00) derived deterministically from `timestamp_utc` |
 | Date dimension | Seeded (2016–2026) | 4,018 daily records seeded via `scripts/seed_dimensions.py` |
-| Boundaries | One `province` column holding pre-merger names | Decided 2026-10-21 by the N1/N2 member: pre-merger (63-province) boundaries, no old/new mapping or SCD2 (task specs §7). Pending team confirmation, because workbook IDs 4/11 ask for old + new |
+| Boundaries | One `province` column holding pre-merger names | Decided 2026-10-21 by the N2 owner of IDs 4/11: pre-merger (63-province) boundaries, no old/new mapping or SCD2 (task specs §7). The workbook ID 11 description was rewritten on 2026-10-22 to this scope and quotes the original "tỉnh cũ + tỉnh mới". Province polygons (ID 4) are in Silver `spatial/boundaries/`, joined to `dim_location.province` by name for maps; they are not loaded into the DW |
 | Stations | Globally unique `station_id`; at most one hourly station per location; roles and distances from `scripts/station_config.py` | Distances are computed once (haversine), not with GeoPandas as ID 11 suggests. Source-specific namespaces remain unverified beyond WMO ids |
 | Prediction grain | Resolved in `sql/04_predictions.sql` (2026-10-21): model version × location × UTC origin, fixed 24 h horizon per model | Add a scenario/source column only if several input configurations are scored |
 | Models | Resolved: `dim_model` with versions, thresholds, artifact hash, and metrics | Loader `scripts/load_predictions.py` upserts on `(model_name, model_version)` |

@@ -183,7 +183,7 @@ ingest_meteostat  ─┼─> transform_open_meteo_to_silver ─┐
 
 **Business purpose.** Province maps in Power BI (ID 27) and a correct province name for each research point (ID 11).
 
-**Decision (2026-10-21, N1/N2 member): use pre-merger boundaries (63 provinces).** Almost the whole study period (2016-01-01 to 2025-06-30) falls before the 2025 reorganization, so reports and maps use the provinces that existed during that period. Weather data is unaffected by this choice: research points are coordinates, not provinces. **Discrepancy:** the workbook asks for post-merger boundaries (ID 4: "ranh giới sau sáp nhập 1/7/2025"; risk sheet: "GeoJSON dùng ranh giới mới") and old + new names (ID 11). The workbook was not edited; the team should confirm the change of scope there.
+**Decision (2026-10-21, N1/N2 member): use pre-merger boundaries (63 provinces).** Almost the whole study period (2016-01-01 to 2025-06-30) falls before the 2025 reorganization, so reports and maps use the provinces that existed during that period. Weather data is unaffected by this choice: research points are coordinates, not provinces. **Discrepancy:** the workbook asks for post-merger boundaries (ID 4: "ranh giới sau sáp nhập 1/7/2025"; risk sheet: "GeoJSON dùng ranh giới mới") and old + new names (ID 11). On 2026-10-22 the workbook ID 4 and ID 11 descriptions and the risk row 9 handling were rewritten to this decision, each quoting the original wording; the ID 4/11 notes record it too.
 
 **Administrative context (reference only).** National Assembly Resolution 202/2025/QH15 (12 June 2025) reduced 63 provincial units to 34; the new provincial governments operate from 1 July 2025. The mapping below is kept for the report's background section and is not loaded into the DW under this decision:
 
@@ -209,6 +209,8 @@ PTO and HBI fall in the same new province; they remain separate research points 
 | GADM | Widely used, but its terms restrict redistribution; avoid unless the license is acceptable |
 
 None of these licenses, versions, or geometries were verified in this review.
+
+**Implemented 2026-10-22 (`scripts/ingest_boundaries.py`).** Checked sources: the HDX `cod-ab-vnm` dataset now serves only the 34-province version (the earlier 63-province files are no longer listed), so it could not be used. geoBoundaries gbOpen VNM ADM1 was chosen, pinned to release commit `9469f09`: 64 units (63 provinces, with Côn Đảo split from Bà Rịa–Vũng Tàu), boundary year 2008, CRS84, all 64 geometries valid, and all 8 research points inside their expected province. Its metadata gives the license as public domain (from Wikimedia Commons), while HDX lists the same data under ODbL; the manifest records both. The geometry is coarse (mean 246 vertices per unit) and comes from Wikipedia/Wikimedia, not from the government: suitable for maps, not for precise spatial analysis. Boundary changes after 2008 were not checked. Details: [data contract](data-contract.md#province-boundaries-geojson).
 
 **Required output.** Bronze GeoJSON (63 provinces) with a manifest (source URL, license, version or date, retrieval date, CRS, feature count); a geometry-validity check; a point-in-polygon check that each research point falls inside its expected pre-merger province (HAN Hà Nội, PTO Phú Thọ, TNG Thái Nguyên, TUQ Tuyên Quang, LCA Lào Cai, HBI Hòa Bình, HPH Hải Phòng, NBI Ninh Bình). The existing `dim_location.province` values already hold the pre-merger names, so no DW migration is needed under this decision.
 
