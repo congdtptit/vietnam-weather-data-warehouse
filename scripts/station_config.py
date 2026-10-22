@@ -223,3 +223,20 @@ def validate_station_location_mapping(station_id: str) -> tuple[bool, str | None
         )
 
     return True, loc, f"Mapped to canonical location {loc}"
+
+
+def ghcnh_stations_for(location_code: str) -> list[str]:
+    """GHCNh rain station ids mapped to one research location (empty if it has none)."""
+    code = location_code.strip().upper()
+    if code not in CANONICAL_LOCATIONS:
+        raise ValueError(f"Unknown location: {location_code}")
+    return [sid for sid, m in GHCNH_RAIN_STATIONS.items() if m["location_code"] == code]
+
+
+def resolve_ghcnh_stations(stations: str | None, location: str | None) -> list[str] | None:
+    """Station ids for the GHCNh CLIs: None means all stations, [] means nothing to do."""
+    if stations and location:
+        raise ValueError("use either --stations or --location, not both")
+    if location:
+        return ghcnh_stations_for(location)
+    return [s.strip() for s in stations.split(",")] if stations else None

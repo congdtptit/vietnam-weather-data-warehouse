@@ -9,6 +9,7 @@ from unittest.mock import Mock
 import pandas as pd
 import pytest
 import reconcile_dw as rec
+from minio.error import S3Error
 
 
 def _parquet(rows):
@@ -23,18 +24,28 @@ def _client(objects):
     client.list_objects.side_effect = lambda bucket, prefix, recursive: [
         SimpleNamespace(object_name=k) for k in objects if k.startswith(prefix)
     ]
-    client.get_object.side_effect = lambda bucket, key: SimpleNamespace(
-        read=lambda: objects[key], close=lambda: None, release_conn=lambda: None
-    )
+
+    def get(bucket, key):
+        if key not in objects:
+            raise S3Error("NoSuchKey", "missing", "/r", "req", "host", None)
+        return SimpleNamespace(
+            read=lambda: objects[key], close=lambda: None, release_conn=lambda: None
+        )
+
+    client.get_object.side_effect = get
     client.put_object.side_effect = lambda bucket, key, data, length, ct: store.update(
         {key: data.read()}
     )
     return client, store
 
 
-def _conn(rows):
+def _conn(rows, rain_rows=()):
+    """Fake connection answering the hourly and the daily-rain count queries."""
     cur = Mock()
-    cur.fetchall.return_value = rows
+    cur.execute.side_effect = lambda sql, args: setattr(
+        cur, "rows", list(rain_rows) if "fact_station_daily_rain" in sql else rows
+    )
+    cur.fetchall.side_effect = lambda: cur.rows
     conn = Mock()
     conn.cursor.return_value.__enter__ = lambda self: cur
     conn.cursor.return_value.__exit__ = lambda self, *a: None
@@ -74,3 +85,23 @@ def test_missing_or_extra_groups_fail():
 def test_compare_reports_both_sides():
     out = rec.compare(Counter({("A", "HAN", 2024): 2}), Counter({("A", "HAN", 2025): 1}))
     assert {(m["year"], m["silver"], m["dw"]) for m in out} == {(2024, 2, 0), (2025, 0, 1)}
+
+
+def test_daily_rain_is_reconciled_per_station_year():
+    rain = io.BytesIO()
+    pd.DataFrame({"rain_day_utc": pd.to_datetime(["2024-01-01", "2024-01-02"]).date}).to_parquet(
+        rain
+    )
+    objects = {
+        **SILVER,
+        "ghcnh/station_daily_rain/year=2024/ghcnh_daily_rain_48825_2024.parquet": rain.getvalue(),
+    }
+    hourly = [("Open-Meteo", "HAN", 2024, 2), ("Meteostat", "HAN", 2024, 1)]
+    client, _ = _client(objects)
+    report = rec.reconcile(
+        2024, 2024, "HAN", client=client, conn=_conn(hourly, [("48825", 2024, 2)])
+    )
+    assert report["daily_rain_stations"] == ["48825"] and report["daily_rain_dw_rows"] == 2
+    client, _ = _client(objects)
+    with pytest.raises(RuntimeError, match="1 group"):
+        rec.reconcile(2024, 2024, "HAN", client=client, conn=_conn(hourly, [("48825", 2024, 1)]))

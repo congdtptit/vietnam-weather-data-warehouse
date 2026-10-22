@@ -1004,3 +1004,20 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
 - Decision recorded (owner of ID 17, given with the go-ahead on 2026-10-22): the smallest DAG test window is one year × one location; the GHCNh chain joins the DAG; boundaries stay a one-off script; ERA5 joins after ID 15.
 - Checks: link and anchor check over README and `docs/` (0 problems); `git diff --check`.
 - Limits: `docs/progress.md` entries keep the figures as they were measured; earlier entries are corrected only by dated notes.
+
+## ID 17 completion: GHCNh chain in the DAG and the 2016–2025 acceptance run — 2026-10-22
+
+- Related work: workbook ID 17; decision recorded in `docs/task-specs-weeks-2-5.md` §5 (one year × one location test window; GHCNh joins the DAG).
+- Changes:
+  - `scripts/station_config.py`: `ghcnh_stations_for(location)` and `resolve_ghcnh_stations(stations, location)`.
+  - `scripts/ingest_ghcnh.py`, `scripts/transform_ghcnh_to_silver.py`, `scripts/load_station_daily_rain.py`: new `--location` option (exclusive with `--stations`); a location without a GHCNh station (PTO, TUQ, HBI) prints "nothing to do" and exits 0.
+  - `dags/dag_weather_pipeline.py`: `ingest_ghcnh` (one retry) → `transform_ghcnh_to_silver --overwrite` → after `seed_dimensions`, `load_station_daily_rain` → `reconcile`.
+  - `scripts/reconcile_dw.py`: also compares Silver GHCNh rows with `fact_station_daily_rain` per station × year of the rain day (a missing Silver station-year counts as 0).
+  - Tests: DAG order with the GHCNh tasks, rendered commands, station resolution, daily-rain reconciliation pass/fail. `make test` → 147 passed, 18 deselected; `ruff` passed.
+- Data (real, through Airflow):
+  - Before: `fact_station_daily_rain` 17,866 rows, 92,090.2 mm (2024: 48803 358, 48823 358, 48825 355, 48826 355, 48831 353 days).
+  - Run `manual__2026-10-22T13:49:07` (2024, HAN): 11/11 tasks succeeded on the first try; hourly 17,551 = 17,551; daily rain (48825) 355 = 355.
+  - Acceptance run `manual__2026-10-22T13:50:10` (2016–2025, all locations): 11/11 succeeded on the first try, 13:50:10–13:53:53Z (3 min 43 s; `load_gold_observations` 155 s). Ingestion stored nothing: Open-Meteo 80 skipped by manifest, Meteostat 15 existing skipped, GHCNh 50 skipped by manifest. Reconcile (`gold/quality_reports/reconcile_2016_2025_20261022T135347Z.json`): 90 hourly groups, Silver 788,861 = DW 788,861; 50 station-year groups, Silver 17,866 = DW 17,866; passed.
+  - After: DW 788,861 rows = 788,861 distinct keys, rain 180,520.90 mm; daily rain 17,866 rows, 92,090.2 mm; `vw_prediction_vs_actual` outcomes unchanged (TP 27,467 / FP 8,569 / TN 26,617 / FN 7,235).
+- Limits: the Meteostat ingester still sends its 25 requests for station-years that return HTTP 404 on every run (no data downloaded; it has no manifest to remember them, ID 9). Boundaries and ERA5 are not in the DAG. No schedule (ID 25) and no quality gates beyond row reconciliation (ID 24).
+- Next step: ID 24 (quality checks inside the DAG). Workbook ID 17: Đang làm 95.

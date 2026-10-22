@@ -22,7 +22,7 @@ from load_gold_observations import get_db_connection
 from minio import Minio
 from minio.error import S3Error
 from psycopg2.extras import execute_values
-from station_config import GHCNH_RAIN_STATIONS
+from station_config import GHCNH_RAIN_STATIONS, resolve_ghcnh_stations
 from transform_ghcnh_to_silver import BUCKET_SILVER, SOURCE_NAME, silver_keys
 
 UPSERT_SQL = """
@@ -176,8 +176,17 @@ def main() -> int:
     parser.add_argument("--start-year", type=int, required=True, help="First year (inclusive)")
     parser.add_argument("--end-year", type=int, required=True, help="Last year (inclusive)")
     parser.add_argument("--stations", type=str, default=None, help="Comma-separated WMO ids")
+    parser.add_argument(
+        "--location", default=None, help="Only the GHCNh station(s) of this research location"
+    )
     args = parser.parse_args()
-    stations = [s.strip() for s in args.stations.split(",")] if args.stations else None
+    try:
+        stations = resolve_ghcnh_stations(args.stations, args.location)
+    except ValueError as ex:
+        parser.error(str(ex))
+    if stations == []:
+        print(f"No GHCNh station is mapped to {args.location}; nothing to do")
+        return 0
     try:
         run_load(args.start_year, args.end_year, stations)
     except RuntimeError as ex:

@@ -7,7 +7,9 @@ Bronze -> DW DAG). Counts rows per source x location x UTC year in Silver `weath
 group differs or exists on one side only. A JSON report is written to
 gold/quality_reports/reconcile_<start>_<end>[_<location>]_<timestamp>.json.
 
-Silver rows outside the canonical locations are ignored, as the loader ignores them.
+Silver rows outside the canonical locations are ignored, as the loader ignores them. GHCNh
+daily rain is reconciled too: Silver station-year rows against fact_station_daily_rain per
+station x UTC year of the rain day.
 """
 
 from __future__ import annotations
@@ -30,6 +32,9 @@ from load_gold_observations import (
     requested_locations,
 )
 from minio import Minio
+from minio.error import S3Error
+from station_config import GHCNH_RAIN_STATIONS, ghcnh_stations_for
+from transform_ghcnh_to_silver import silver_keys as ghcnh_silver_keys
 
 Key = tuple[str, str, int]  # source, location, UTC year
 
@@ -74,6 +79,45 @@ def silver_counts(
     return counts
 
 
+DAILY_RAIN_COUNT_SQL = """
+    SELECT st.station_id, extract(year FROM f.rain_day_utc)::int AS year, count(*)
+    FROM fact_station_daily_rain f
+    JOIN dim_station st ON st.station_key = f.station_key
+    WHERE f.rain_day_utc >= %s AND f.rain_day_utc < %s AND st.station_id = ANY(%s)
+    GROUP BY 1, 2
+"""
+
+
+def silver_daily_rain_counts(
+    client: Minio, start_year: int, end_year: int, stations: list[str]
+) -> Counter[Key]:
+    counts: Counter[Key] = Counter()
+    for sid in stations:
+        for year in range(start_year, end_year + 1):
+            key, _ = ghcnh_silver_keys(sid, year)
+            try:
+                resp = client.get_object(BUCKET_SILVER, key)
+            except S3Error as err:
+                if getattr(err, "code", None) in ("NoSuchKey", "NoSuchObject"):
+                    continue  # no usable day that year: compared as 0 rows
+                raise
+            try:
+                df = pd.read_parquet(io.BytesIO(resp.read()), columns=["rain_day_utc"])
+            finally:
+                resp.close()
+                resp.release_conn()
+            for yr, n in pd.to_datetime(df["rain_day_utc"]).dt.year.value_counts().items():
+                counts[("GHCNh", sid, int(yr))] += int(n)
+    return counts
+
+
+def dw_daily_rain_counts(conn, start_year: int, end_year: int, stations: list[str]) -> Counter[Key]:
+    start, end = datetime(start_year, 1, 1).date(), datetime(end_year + 1, 1, 1).date()
+    with conn.cursor() as cur:
+        cur.execute(DAILY_RAIN_COUNT_SQL, (start, end, stations))
+        return Counter({("GHCNh", sid, int(yr)): int(n) for sid, yr, n in cur.fetchall()})
+
+
 def dw_counts(conn, start_year: int, end_year: int, locations: list[str]) -> Counter[Key]:
     start = datetime(start_year, 1, 1, tzinfo=timezone.utc)
     end = datetime(end_year + 1, 1, 1, tzinfo=timezone.utc)
@@ -99,16 +143,22 @@ def reconcile(
     conn=None,
 ) -> dict[str, Any]:
     locations = requested_locations(location)
+    stations = ghcnh_stations_for(location) if location else list(GHCNH_RAIN_STATIONS)
     client = client or get_minio_client()
     own_conn = conn is None
     conn = conn or get_db_connection()
     try:
         silver = silver_counts(client, start_year, end_year, locations)
         dw = dw_counts(conn, start_year, end_year, locations)
+        rain_silver = silver_daily_rain_counts(client, start_year, end_year, stations)
+        rain_dw = (
+            dw_daily_rain_counts(conn, start_year, end_year, stations) if stations else Counter()
+        )
     finally:
         if own_conn:
             conn.close()
     mismatches = compare(silver, dw)
+    rain_mismatches = compare(rain_silver, rain_dw)
     report = {
         "check": "reconcile Silver weather_hourly vs fact_weather_observation",
         "window_utc_years": [start_year, end_year],
@@ -118,7 +168,12 @@ def reconcile(
         "silver_rows": sum(silver.values()),
         "dw_rows": sum(dw.values()),
         "mismatches": mismatches,
-        "passed": not mismatches,
+        "daily_rain_stations": stations,
+        "daily_rain_groups": len(set(rain_silver) | set(rain_dw)),
+        "daily_rain_silver_rows": sum(rain_silver.values()),
+        "daily_rain_dw_rows": sum(rain_dw.values()),
+        "daily_rain_mismatches": rain_mismatches,
+        "passed": not mismatches and not rain_mismatches,
         "checked_at_utc": datetime.now(timezone.utc).isoformat(),
     }
     tag = f"{start_year}_{end_year}" + (f"_{locations[0]}" if location else "")
@@ -126,11 +181,15 @@ def reconcile(
     body = json.dumps(report, indent=2).encode("utf-8")
     client.put_object(BUCKET_GOLD, key, io.BytesIO(body), len(body), "application/json")
     report["report_key"] = f"{BUCKET_GOLD}/{key}"
-    print(json.dumps({k: v for k, v in report.items() if k != "mismatches"}, indent=2))
-    if mismatches:
-        raise RuntimeError(
-            f"{len(mismatches)} group(s) differ between Silver and DW: {mismatches[:5]}"
+    print(
+        json.dumps(
+            {k: v for k, v in report.items() if k not in ("mismatches", "daily_rain_mismatches")},
+            indent=2,
         )
+    )
+    if mismatches or rain_mismatches:
+        bad = mismatches + rain_mismatches
+        raise RuntimeError(f"{len(bad)} group(s) differ between Silver and DW: {bad[:5]}")
     return report
 
 

@@ -2,12 +2,14 @@
 
 Bronze -> Silver -> Gold -> DW for an explicit window of UTC years (workbook ID 17;
 specification in docs/task-specs-weeks-2-5.md section 5). Manual trigger only; incremental
-scheduling is ID 25.
+scheduling is ID 25. Hourly observations (Open-Meteo, Meteostat) go to
+fact_weather_observation; GHCNh daily station rain goes to fact_station_daily_rain.
 
 Each task runs an existing script; a non-zero exit fails the task. Ingestion skips objects
 whose manifest and checksum are current, transforms rewrite Silver for the window, the Gold
-loader replaces the window in the DW, and `reconcile` fails when DW row counts differ from
-Silver per source x location x year. Only parameters and report keys pass between tasks.
+loaders replace the window in the DW, and `reconcile` fails when DW row counts differ from
+Silver per source x location x year (hourly) or per station x year (daily rain). Only
+parameters and report keys pass between tasks.
 """
 
 from datetime import datetime, timedelta
@@ -38,7 +40,7 @@ def script(name: str, args: str) -> str:
 
 with DAG(
     dag_id="weather_bronze_to_dw_dag",
-    description="Open-Meteo and Meteostat: Bronze -> Silver -> Gold -> DW, then reconcile",
+    description="Open-Meteo, Meteostat, GHCNh: Bronze -> Silver -> Gold -> DW, then reconcile",
     schedule=None,
     start_date=datetime(2024, 1, 1),
     catchup=False,
@@ -73,17 +75,31 @@ with DAG(
         task_id="transform_meteostat_to_silver",
         bash_command=script("transform_meteostat_to_silver.py", YEARS + " --overwrite"),
     )
+    ingest_gh = BashOperator(
+        task_id="ingest_ghcnh",
+        bash_command=script("ingest_ghcnh.py", YEARS + LOCATION),
+        **network,
+    )
+    silver_gh = BashOperator(
+        task_id="transform_ghcnh_to_silver",
+        bash_command=script("transform_ghcnh_to_silver.py", YEARS + LOCATION + " --overwrite"),
+    )
     seed = BashOperator(task_id="seed_dimensions", bash_command=script("seed_dimensions.py", ""))
     load = BashOperator(
         task_id="load_gold_observations",
         bash_command=script("load_gold_observations.py", YEARS + LOCATION),
+    )
+    load_rain = BashOperator(
+        task_id="load_station_daily_rain",
+        bash_command=script("load_station_daily_rain.py", YEARS + LOCATION),
     )
     reconcile = BashOperator(
         task_id="reconcile",
         bash_command=script("reconcile_dw.py", YEARS + LOCATION),
     )
 
-    check >> [ingest_om, ingest_ms]
+    check >> [ingest_om, ingest_ms, ingest_gh]
     ingest_om >> silver_om
     ingest_ms >> silver_ms
-    [silver_om, silver_ms] >> seed >> load >> reconcile
+    ingest_gh >> silver_gh
+    [silver_om, silver_ms, silver_gh] >> seed >> [load, load_rain] >> reconcile

@@ -35,7 +35,7 @@ from ingest_ghcnh import bronze_keys, get_minio_client, is_s3_not_found_error, r
 from minio import Minio
 from minio.error import S3Error
 from quality_checks import resolve_duplicates_with_quarantine
-from station_config import GHCNH_RAIN_STATIONS
+from station_config import GHCNH_RAIN_STATIONS, resolve_ghcnh_stations
 
 BUCKET_BRONZE = os.getenv("MINIO_BUCKET_BRONZE", "bronze")
 BUCKET_SILVER = os.getenv("MINIO_BUCKET_SILVER", "silver")
@@ -323,8 +323,17 @@ def main() -> int:
     parser.add_argument("--end-year", type=int, required=True, help="Last year (inclusive)")
     parser.add_argument("--stations", type=str, default=None, help="Comma-separated WMO ids")
     parser.add_argument("--overwrite", action="store_true", help="Rewrite existing Silver objects")
+    parser.add_argument(
+        "--location", default=None, help="Only the GHCNh station(s) of this research location"
+    )
     args = parser.parse_args()
-    stations = [s.strip() for s in args.stations.split(",")] if args.stations else None
+    try:
+        stations = resolve_ghcnh_stations(args.stations, args.location)
+    except ValueError as ex:
+        parser.error(str(ex))
+    if stations == []:
+        print(f"No GHCNh station is mapped to {args.location}; nothing to do")
+        return 0
     try:
         process_ghcnh_to_silver(args.start_year, args.end_year, stations, args.overwrite)
     except RuntimeError as ex:
