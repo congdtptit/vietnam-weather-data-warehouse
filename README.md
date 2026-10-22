@@ -21,7 +21,7 @@ Cập nhật ngày **2026-10-22**. Bằng chứng chi tiết (lệnh đã chạy
 
 Dữ liệu thực 2016–2025 đã được dựng lại trên một máy cục bộ ngày 2026-10-21: DW có 788.861 dòng quan sát giờ (Open-Meteo 8 vị trí; Meteostat chỉ Hà Nội và không có mưa), 17.866 dòng mưa ngày GHCNh, 700.800 nhãn dùng được. Lần kiểm tra gần nhất (22/10): `make test` 118 test đạt, `make test-integration` 18 test đạt.
 
-**Chưa hoàn chỉnh**: ERA5 (NetCDF) và địa giới GeoJSON thực (63 tỉnh, trước sáp nhập; chờ nhóm xác nhận) chưa bắt đầu, nên mục tiêu đa định dạng chưa đạt; lưu payload gốc Bronze kèm manifest (Open-Meteo, Meteostat); DAG Bronze → DW; DAG chấm điểm dự báo (task 32); dashboard Power BI và trang dự báo (task 33). Model v1 tối ưu F1, chưa có quy tắc ưu tiên Recall (đề xuất chờ duyệt). Nhãn và đặc trưng dựa trên dữ liệu tái phân tích, chưa phải số đo trạm. Trạng thái nghiệm thu từng task do bảng phân công quản lý, không suy ra từ việc có file.
+**Chưa hoàn chỉnh**: ERA5 (NetCDF) và địa giới GeoJSON thực (63 tỉnh, trước sáp nhập, đã chốt) chưa bắt đầu, nên mục tiêu đa định dạng chưa đạt; lưu payload gốc Bronze kèm manifest (Open-Meteo, Meteostat); DAG Bronze → DW; DAG chấm điểm dự báo (task 32); dashboard Power BI và trang dự báo (task 33). Model v1 tối ưu F1, chưa có quy tắc ưu tiên Recall (đề xuất chờ duyệt). Nhãn và đặc trưng dựa trên dữ liệu tái phân tích, chưa phải số đo trạm. Trạng thái nghiệm thu từng task do bảng phân công quản lý, không suy ra từ việc có file.
 
 ## Tài liệu và phân công
 

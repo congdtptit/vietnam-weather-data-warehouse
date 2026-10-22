@@ -183,7 +183,7 @@ ingest_meteostat  ─┼─> transform_open_meteo_to_silver ─┐
 
 **Business purpose.** Province maps in Power BI (ID 27) and a correct province name for each research point (ID 11).
 
-**Decision (2026-10-21, N1/N2 member): use pre-merger boundaries (63 provinces).** Almost the whole study period (2016-01-01 to 2025-06-30) falls before the 2025 reorganization, so reports and maps use the provinces that existed during that period. Weather data is unaffected by this choice: research points are coordinates, not provinces. **Discrepancy:** the workbook asks for post-merger boundaries (ID 4: "ranh giới sau sáp nhập 1/7/2025"; risk sheet: "GeoJSON dùng ranh giới mới") and old + new names (ID 11). The workbook was not edited; the team should confirm the change of scope there.
+**Decision (2026-10-21, N1/N2 member): use pre-merger boundaries (63 provinces).** Almost the whole study period (2016-01-01 to 2025-06-30) falls before the 2025 reorganization, so reports and maps use the provinces that existed during that period. Weather data is unaffected by this choice: research points are coordinates, not provinces. **Discrepancy:** the workbook asks for post-merger boundaries (ID 4: "ranh giới sau sáp nhập 1/7/2025"; risk sheet: "GeoJSON dùng ranh giới mới") and old + new names (ID 11). The workbook task text was not edited; since 2026-10-22 the ID 4/11 notes and risk row 9 record this decision.
 
 **Administrative context (reference only).** National Assembly Resolution 202/2025/QH15 (12 June 2025) reduced 63 provincial units to 34; the new provincial governments operate from 1 July 2025. The mapping below is kept for the report's background section and is not loaded into the DW under this decision:
 

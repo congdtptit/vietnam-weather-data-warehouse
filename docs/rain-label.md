@@ -16,7 +16,7 @@ Version v0.2, 2026-10-21; implementation v0.2.1, 2026-10-22 (label decisions con
 | Missing-label handling | Decided 2026-10-21: a window missing any of its 24 hourly values has no label and is excluded from evaluation; missing is not No. Minimum coverage beyond this stays open |
 | Calendar basis | `date_key`/`time_key` use UTC+7 (see data contract); labels, forecast origins, and splits use UTC |
 | Rain timestamp convention | Verified 2026-10-21 from the Open-Meteo Historical Weather API documentation: hourly `precipitation` is the "sum of the preceding hour". The value at timestamp h covers `(h-1h, h]`, so `(t, t+24h]` uses the values timestamped t+1h through t+24h |
-| Recall versus Precision/false-alarm tradeoff | Open. CART v1 maximizes F1 (see below); a predeclared Recall rule for ID 36 is proposed in [business requirements §5a](business-requirements.md#5a-proposals-awaiting-team-decision-2026-10-22), pending N3 and team |
+| Recall versus Precision/false-alarm tradeoff | Decided 2026-10-22 by the N1/N2 member doing N3's ML work (N3 review pending): the Recall operating point is the threshold with the highest validation precision among those with validation recall ≥ 0.85. CART v1 (corrected validation labels): 0.36, precision 0.710, recall 0.880, F1 0.786. The 0.85 target was set after viewing the validation scan. The frozen 0.40 remains the official test 2025 result; metrics at 0.36 on test are post-hoc (ID 36). See [business requirements §5a](business-requirements.md#5a-proposals-awaiting-team-decision-2026-10-22) |
 
 The rainfall threshold in mm defines ground truth. The probability threshold defines predicted classes. They are not interchangeable.
 
@@ -123,6 +123,19 @@ Validation chose both the configuration and the threshold, so these figures are 
   - Rain after a dry 24 h (≤ 0.05 mm) accounts for 36.3% of misses and is rarely caught: recall 16.6% overall, 2.5% in the dry season, 31.5% in the wet season. After rain in the past 24 h, recall is 87.5%.
 - The largest-rain miss in test 2025 (Ninh Bình, 57.9 mm, probability 0.39) is not typical. Rain began one hour after *t* under a fully overcast sky with a northerly wind and pressure 6.9 hPa higher than a day earlier; the model has no wind-direction feature, and its leaf holds about 40% Rain in train. A typical miss (fixed rule) is Ninh Bình on 2025-01-26: 2.9 mm, probability 0.397.
 - 52 of 88 leaves predict Rain; the 10 largest rules cover 45.6% of train rows; rules have 4–7 merged conditions. Leaf probabilities (fitted on v0.2 labels) differ from the observed train Rain share under corrected labels by at most 0.053; on the v0.2 labels the gap was at most 0.009.
+
+## Review by N3 (pending)
+
+Decisions below were made by the N1/N2 member doing N3's ML work. N3 confirms or rejects each one; confirmed items are then recorded with the date.
+
+1. Label: 1 mm over `(t, t+24h]`, Open-Meteo as the source, a missing hour means no label.
+2. Implementation fix v0.2.1 (rounded rain sums) and the choice not to retrain model v1.
+3. Features v1/v2: the 22 features, integer `month_local`, wind direction left out.
+4. Training rule: grid, selection by validation F1 with the 0.005 tie rule, threshold by validation F1 (0.40).
+5. Recall operating point (validation recall ≥ 0.85, highest precision: 0.36), reported post-hoc on test.
+6. Re-score of the frozen model on corrected test labels as the reference test result.
+7. Tree interpretation (ID 30), including the correction of "rain without warning".
+8. Disclosures: the wind-direction idea came from a test 2025 case, so later models have no independent 2025 test.
 
 ## Artifacts and acceptance
 
