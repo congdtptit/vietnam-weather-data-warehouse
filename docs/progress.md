@@ -1363,3 +1363,27 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
   - Same laptop and Docker as the original, not a second machine; the Airflow base image was not re-pulled.
   - The model was not retrained from today's labels: v1 comes from its release (see above).
   - The clean stack (containers, volumes `weather_clean_*`, image `weather-airflow-clean`, clone in the session scratchpad) is still present until the user agrees to remove it.
+
+## Workbook statuses after the final check of completed tasks — 2026-10-23
+
+- At the user's request, the tasks whose workbook output is met with recorded evidence, and which wait for no decision, were set to "Hoàn thành", 100: IDs 1, 2, 3, 4, 5, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 24, 25, 26, 31, 32, 34 (6 and 7 already were). Their notes were kept; only the phrase "chờ bạn xác nhận Hoàn thành" was removed. Notes that had become stale got a dated line: ID 2 Meteostat manifest done, IDs 5 and 14 gridded download stopped, ID 15 ERA5 loaded into the DW. Remaining limits were stated: ID 12 the ERA5 `update_frequency` seed value, ID 13 the fixed database name.
+- Not changed:
+  - IDs 9 (the GHCNh 300 mm rule waits for the team review), 21, 22, 23, 28, 29, 30, 36 (technically done, waiting for the N3 review checklist in `docs/rain-label.md`).
+  - IDs 20, 27, 33, 35 (Power BI, the teammate's .pbix) and 37–40 (report).
+
+## Correction: ID 36 F1 tie rule — 2026-10-23
+
+- Found while reviewing the N3 checklist with the user: `scripts/analyze_cart_thresholds.py` described and implemented its F1 rule as "lowest threshold on a tie (as in the model's threshold rule)". The model's rule (`train_cart.choose_threshold`, documented in `docs/rain-label.md`) sends ties to the value closest to 0.5. The ID 36 entry above repeated the wrong description.
+- Effect on results: none. The corrected-label validation scan has a single maximum (F1 0.7887 at 0.40; next 0.7879 at 0.34).
+- Fix: the analysis now calls `train_cart.choose_threshold` itself, on the same grid (`GRID = THRESHOLDS`); its JSON states the rule. The test of the removed helper was replaced by a grid identity test. `make test` → 259 passed.
+- Rerun `analyze_cart_thresholds.py --overwrite`: F1 rule 0.40, Recall rule 0.36. Test at 0.40: P 0.7622 / R 0.7915 / F1 0.7766; at 0.36: 0.7228 / 0.8476 / 0.7802; at 0.50: 0.7948 / 0.7416 / 0.7673 (unchanged).
+- The release bundle `outputs/model_release_cart_v1/` was exported again, because it holds that JSON.
+
+## N3 review of the ML decisions and the 300 mm rule confirmed — 2026-10-23
+
+- The user, who holds every role including N3, reviewed the assistant's assessment of each item against the evidence and confirmed:
+  - the eight ML decisions in `docs/rain-label.md` ("Review by N3", now confirmed 2026-10-23);
+  - the GHCNh unsupported-extreme rule. Checked on the data: one day quarantined in 2016–2025 (48823 Nam Định 2023-10-13, 700.0 mm); the supported 491.3 mm (48831, 2025-10-07) and 338.0 mm (48825, 2016-05-25) are kept.
+- The review found the ID 36 tie-rule inconsistency recorded above (fixed, no result changed).
+- Docs: `docs/rain-label.md` (decisions table and checklist, with the points to state in the report), `docs/business-requirements.md` §5a, data contract (unsupported extremes), `README.md`.
+- Workbook: IDs 9, 21, 22, 23, 28, 29, 30, 36 set to "Hoàn thành", 100; notes kept, with a dated line on the review; ID 7 note gets "23/10: N3 đã duyệt". The workbook now has 32 of 40 tasks complete. Open: 20, 27, 33, 35 (Power BI) and 37–40 (report).

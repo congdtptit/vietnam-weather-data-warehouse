@@ -31,7 +31,7 @@ Cập nhật ngày **2026-10-23**. Bằng chứng chi tiết (lệnh đã chạy
 
 Dữ liệu thực 2016–2025 đã được dựng lại trên một máy cục bộ ngày 2026-10-21: DW có 788.861 dòng quan sát giờ (Open-Meteo 8 vị trí; Meteostat chỉ Hà Nội và không có mưa), 17.866 dòng mưa ngày GHCNh, 700.800 nhãn dùng được. Từ 23/10 DW có thêm ERA5 (8 vị trí, 701.376 dòng), tổng 1.490.237 dòng quan sát giờ. Lần kiểm tra gần nhất (23/10): `make test` 260 test đạt, `make test-integration` 22 test đạt.
 
-**Chưa hoàn chỉnh**: dashboard Power BI (task 20, 27), trang dự báo (task 33) và đối chiếu dashboard với SQL (task 35), do bạn trong nhóm làm từ gói dữ liệu đã gửi ngày 23/10; báo cáo, slide và kịch bản demo (task 37–40). Model v1 chọn ngưỡng theo F1 (0,40 là kết quả test chính thức); điểm ưu tiên Recall 0,36 chưa được nhóm N3 duyệt. Nhãn và đặc trưng dựa trên dữ liệu tái phân tích, chưa phải số đo trạm. Trạng thái nghiệm thu từng task do bảng phân công quản lý, không suy ra từ việc có file.
+**Chưa hoàn chỉnh**: dashboard Power BI (task 20, 27), trang dự báo (task 33) và đối chiếu dashboard với SQL (task 35), do bạn trong nhóm làm từ gói dữ liệu đã gửi ngày 23/10; báo cáo, slide và kịch bản demo (task 37–40). Model v1 chọn ngưỡng theo F1 (0,40 là kết quả test chính thức); điểm ưu tiên Recall 0,36 là phương án bổ sung (N3 đã duyệt 8 mục quyết định ML ngày 23/10). Nhãn và đặc trưng dựa trên dữ liệu tái phân tích, chưa phải số đo trạm. Trạng thái nghiệm thu từng task do bảng phân công quản lý, không suy ra từ việc có file.
 
 ## Tài liệu và phân công
 

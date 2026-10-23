@@ -6,8 +6,9 @@ ID 36; rules in docs/rain-label.md).
 
 - Validation 2024 (corrected labels rain_next24h_v0.2.1, features v2): metrics over the grid
   the model's threshold rule used (0.30-0.70, step 0.02), and the two decided rules applied to
-  it: maximum F1 (the rule that froze 0.40 on the original labels) and the Recall operating
-  point (highest precision with recall >= 0.85).
+  it: the model's own threshold rule, train_cart.choose_threshold (maximum F1; ties go to the
+  value closest to 0.5; it froze 0.40 on the original labels), and the Recall operating point
+  (highest precision with recall >= 0.85).
 - Test 2025: metrics only at predeclared thresholds (0.40 official, the Recall operating point,
   0.50 for reference). Nothing is selected on test; the test figures are post-hoc and are
   reported as such. Error breakdowns at the official threshold and the operating point.
@@ -38,7 +39,9 @@ from minio import Minio
 from rescore_cart_corrected_labels import corrected_evaluation_key
 from train_cart import (
     MODEL_VERSION,
+    THRESHOLDS,
     _get,
+    choose_threshold,
     classification_metrics,
     drop_missing,
     model_keys,
@@ -46,9 +49,7 @@ from train_cart import (
 )
 
 FEATURE_VERSION = "v2"  # corrected labels; same feature values as v1 up to rounding (ID 22)
-GRID = [
-    round(t, 2) for t in np.arange(0.30, 0.7001, 0.02)
-]  # the grid of the model's threshold rule
+GRID = THRESHOLDS  # the grid of the model's threshold rule (0.30-0.70, step 0.02)
 RECALL_TARGET = 0.85  # decided 2026-10-22 (docs/rain-label.md)
 REFERENCE = 0.50
 MISSED_BINS = [1.0, 2.0, 5.0, 10.0, 20.0, float("inf")]
@@ -85,12 +86,6 @@ def scan(y: np.ndarray, proba: np.ndarray, thresholds: list[float]) -> list[dict
             }
         )
     return rows
-
-
-def f1_rule(rows: list[dict[str, Any]]) -> float:
-    """Maximum F1; the lowest threshold wins a tie (as in the model's threshold rule)."""
-    best = max(r["f1"] for r in rows if r["f1"] is not None)
-    return min(r["threshold"] for r in rows if r["f1"] == best)
 
 
 def recall_rule(rows: list[dict[str, Any]], target: float = RECALL_TARGET) -> float | None:
@@ -178,7 +173,8 @@ def analyze(
     val = val.assign(probability=model.predict_proba(val[cols])[:, 1])
     y_val = val["rain_next24h"].to_numpy(bool)
     val_scan = scan(y_val, val["probability"].to_numpy(), GRID)
-    f1_threshold, recall_threshold = f1_rule(val_scan), recall_rule(val_scan)
+    f1_threshold, _ = choose_threshold(y_val, val["probability"].to_numpy())
+    recall_threshold = recall_rule(val_scan)
     if recall_threshold is None:
         raise ValueError(f"no threshold on the grid reaches validation recall {RECALL_TARGET}")
 
@@ -218,7 +214,8 @@ def analyze(
         "label_version": str(test["label_version"].iloc[0]),
         "rules": {
             "grid": GRID,
-            "f1_rule": "maximum validation F1 on the grid (lowest threshold on a tie)",
+            "f1_rule": "the model's rule train_cart.choose_threshold: maximum validation F1 "
+            "on the grid, ties go to the value closest to 0.5",
             "recall_rule": f"highest validation precision among thresholds with validation recall >= {RECALL_TARGET}",
         },
         "validation": {
