@@ -1378,3 +1378,12 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
 - Fix: the analysis now calls `train_cart.choose_threshold` itself, on the same grid (`GRID = THRESHOLDS`); its JSON states the rule. The test of the removed helper was replaced by a grid identity test. `make test` → 259 passed.
 - Rerun `analyze_cart_thresholds.py --overwrite`: F1 rule 0.40, Recall rule 0.36. Test at 0.40: P 0.7622 / R 0.7915 / F1 0.7766; at 0.36: 0.7228 / 0.8476 / 0.7802; at 0.50: 0.7948 / 0.7416 / 0.7673 (unchanged).
 - The release bundle `outputs/model_release_cart_v1/` was exported again, because it holds that JSON.
+
+## N3 review of the ML decisions and the 300 mm rule confirmed — 2026-10-23
+
+- The user, who holds every role including N3, reviewed the assistant's assessment of each item against the evidence and confirmed:
+  - the eight ML decisions in `docs/rain-label.md` ("Review by N3", now confirmed 2026-10-23);
+  - the GHCNh unsupported-extreme rule. Checked on the data: one day quarantined in 2016–2025 (48823 Nam Định 2023-10-13, 700.0 mm); the supported 491.3 mm (48831, 2025-10-07) and 338.0 mm (48825, 2016-05-25) are kept.
+- The review found the ID 36 tie-rule inconsistency recorded above (fixed, no result changed).
+- Docs: `docs/rain-label.md` (decisions table and checklist, with the points to state in the report), `docs/business-requirements.md` §5a, data contract (unsupported extremes), `README.md`.
+- Workbook: IDs 9, 21, 22, 23, 28, 29, 30, 36 set to "Hoàn thành", 100; notes kept, with a dated line on the review; ID 7 note gets "23/10: N3 đã duyệt". The workbook now has 32 of 40 tasks complete. Open: 20, 27, 33, 35 (Power BI) and 37–40 (report).
