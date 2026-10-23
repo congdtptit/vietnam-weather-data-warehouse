@@ -59,3 +59,26 @@ Do not add rain across sources at the same point/hour. Do not add rainfall acros
 Initialization is for new databases only: `CREATE TABLE IF NOT EXISTS` does not change existing structures. `01_init_postgres.sh` uses literal `weather_dwh`; configurable `DWH_DB` is not fully supported. Do not delete volumes to change schemas.
 
 Before changes, read the PostgreSQL skill, provide a separate migration, and check dimension uniqueness/FKs, fact grain, calendar boundaries, reruns, and hour → day → month rollups. Distinguish authored SQL from executed SQL and report the tested data scope.
+
+## Query performance (ID 26, measured 2026-10-23)
+
+Workload and tool: `scripts/benchmark_dw_queries.py` runs the dashboard refresh queries (whole views, as Power BI Import reads them) and the filtered SQL used to reconcile dashboard numbers (ID 35) under `EXPLAIN (ANALYZE, BUFFERS)`, three runs each, and writes `gold/quality_reports/dw_query_benchmark_<ts>.json`. Measured on the local Compose PostgreSQL 16 (`work_mem` 4 MB, `jit` on) with 1,490,237 fact rows:
+
+| Query | Median server time | Rows |
+| --- | --- | --- |
+| Refresh `vw_obs_daily` | 1,296 ms | 62,118 |
+| Refresh `vw_obs_hourly` | 1,257 ms | 1,490,237 |
+| Refresh `vw_obs_monthly` | 1,290 ms | 2,057 |
+| Refresh `vw_coverage` | 326 ms | 187 |
+| Refresh `vw_prediction_vs_actual` | 1,223 ms | 69,888 |
+| Refresh `vw_rain_station_vs_model` | 359 ms | 17,866 |
+| Check: daily HAN Open-Meteo 2024 | 367 ms | 1 |
+| Check: hourly HAN Open-Meteo 2024-07-15 | 0.4 ms (index `idx_fwo_location_source_ts`) | 24 |
+| Check: monthly ERA5 2024 | 1,176 ms | 96 |
+
+All refresh queries together take about 5.8 s of server time. Findings:
+
+- The daily, monthly, and yearly views aggregate every fact row before any filter applies, so they scan the whole table; their cost is the scan and a sort that spills to disk at `work_mem` 4 MB.
+- Candidate indexes were created and measured inside a transaction that was rolled back (composite `(source_key, location_key, date_key)`, the unindexed foreign keys `time_key`, `station_key` (partial), `prediction_date_key`, `prediction_time_key`): the aggregate plans did not change (same times, still a full scan and sort); only the already index-backed hourly lookup moved from 0.5 to 0.4 ms. No index was kept, because it would slow the Gold load without helping the measured queries. The existing indexes (`idx_fwo_location_source_ts`, `idx_fwo_date`, `uq_weather_obs`, prediction indexes) already serve the selective lookups.
+- Session-level settings were also measured: `jit = off` saved about 0.3 s on `vw_prediction_vs_actual` and little elsewhere; `work_mem = 64MB` cut the daily and monthly views by about a quarter but slowed others in the same run. No server setting was changed.
+- Latency target (decided by the user on 2026-10-23): each view refresh under 5 s and each reconciliation query under 2 s on this machine. The measured maxima (1.3 s and 1.2 s) meet it. If later volumes need more, the next step is a materialized daily aggregate refreshed after each load, not more indexes.

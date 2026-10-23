@@ -16,7 +16,7 @@ Version v0.2, 2026-10-21; implementation v0.2.1, 2026-10-22 (label decisions con
 | Missing-label handling | Decided 2026-10-21: a window missing any of its 24 hourly values has no label and is excluded from evaluation; missing is not No. Minimum coverage beyond this stays open |
 | Calendar basis | `date_key`/`time_key` use UTC+7 (see data contract); labels, forecast origins, and splits use UTC |
 | Rain timestamp convention | Verified 2026-10-21 from the Open-Meteo Historical Weather API documentation: hourly `precipitation` is the "sum of the preceding hour". The value at timestamp h covers `(h-1h, h]`, so `(t, t+24h]` uses the values timestamped t+1h through t+24h |
-| Recall versus Precision/false-alarm tradeoff | Decided 2026-10-22 by the N1/N2 member doing N3's ML work (N3 review pending): the Recall operating point is the threshold with the highest validation precision among those with validation recall ≥ 0.85. CART v1 (corrected validation labels): 0.36, precision 0.710, recall 0.880, F1 0.786. The 0.85 target was set after viewing the validation scan. The frozen 0.40 remains the official test 2025 result; metrics at 0.36 on test are post-hoc (ID 36). See [business requirements §5a](business-requirements.md#5a-proposals-awaiting-team-decision-2026-10-22) |
+| Recall versus Precision/false-alarm tradeoff | Decided 2026-10-22 by the N1/N2 member doing N3's ML work (N3 review pending): the Recall operating point is the threshold with the highest validation precision among those with validation recall ≥ 0.85. CART v1 (corrected validation labels): 0.36, precision 0.710, recall 0.880, F1 0.786. The 0.85 target was set after viewing the validation scan. The frozen 0.40 remains the official test 2025 result; metrics at 0.36 on test are post-hoc (ID 36, [analysis below](#threshold-comparison-and-error-analysis-id-36-2026-10-23)). See [business requirements §5a](business-requirements.md#5a-proposals-awaiting-team-decision-2026-10-22) |
 
 The rainfall threshold in mm defines ground truth. The probability threshold defines predicted classes. They are not interchangeable.
 
@@ -108,6 +108,51 @@ Validation chose both the configuration and the threshold, so these figures are 
 - F1 by location: 0.763 (HBI) to 0.789 (TUQ). Wet season May–Oct: F1 0.836 (recall 0.875). Dry season Nov–Apr: F1 0.624 (recall 0.597). By month, F1 ranges from 0.517 (January) to 0.903 (June).
 - Share of Rain cases detected by rain amount: 1–5 mm 66%, 5–20 mm 84%, ≥ 20 mm 94%.
 - Test F1 is 1.2 points below the corrected validation F1 (0.789), consistent with validation being optimistic after selection. No design choice was changed after seeing test. Results are a retrospective experiment on Open-Meteo reanalysis.
+
+### Threshold comparison and error analysis (ID 36, 2026-10-23)
+
+`scripts/analyze_cart_thresholds.py` → `gold/ml_models/cart_rain_next24h_v1/threshold_error_analysis.json`. The model is checked first (same SHA-256 as the corrected-label evaluation, same test confusion matrix at 0.40). Features v2 with labels v0.2.1. Thresholds are compared on validation 2024 over the grid of the model's threshold rule (0.30–0.70, step 0.02); test 2025 is evaluated **only at thresholds fixed on validation** (post-hoc, disclosed). No model or threshold is chosen from test.
+
+Validation 2024 (70,080 windows, rain share 0.501):
+
+| Threshold | Precision | Recall | F1 | Share predicted Rain |
+| --- | --- | --- | --- | --- |
+| 0.30 | 0.683 | 0.919 | 0.784 | 0.673 |
+| 0.36 (Recall rule) | 0.710 | 0.880 | 0.786 | 0.621 |
+| 0.40 (F1 rule, official) | 0.760 | 0.820 | 0.789 | 0.540 |
+| 0.50 | 0.794 | 0.772 | 0.783 | 0.487 |
+| 0.70 | 0.872 | 0.597 | 0.709 | 0.343 |
+
+On the corrected labels the F1 rule still gives 0.40, the threshold frozen on the original labels, and the Recall rule gives 0.36.
+
+Test 2025 at the predeclared thresholds (69,888 windows, rain share 0.497; post-hoc):
+
+| Threshold | Precision | Recall | F1 | False alarms | Missed rain |
+| --- | --- | --- | --- | --- | --- |
+| 0.40 official | 0.762 | 0.792 | 0.777 | 8,569 | 7,235 |
+| 0.36 Recall operating point | 0.723 | 0.848 | 0.780 | 11,278 | 5,290 |
+| 0.50 reference | 0.795 | 0.742 | 0.767 | 6,644 | 8,966 |
+
+Moving from 0.40 to 0.36 catches 1,945 more rain windows for 2,709 more false alarms. Test recall at 0.36 (0.848) is just below the validation target of 0.85.
+
+Where the model errs on test at 0.40 (validation shows the same pattern):
+
+- **Light rain is missed most:** 42.1% of 1–2 mm windows are missed, 27.4% of 2–5 mm, 20.3% of 5–10 mm, 11.5% of 10–20 mm, and 5.5% of ≥ 20 mm. At 0.36: 32.2%, 20.1%, 14.3%, 7.9%, and 3.7%.
+- **Most false alarms are near the 1 mm label threshold:** of 8,569 false alarms, 2,250 fall on windows with 0.5–1 mm and 4,243 on 0–0.5 mm; only 2,076 are on completely dry windows (10.6% of them).
+- **Rain after a dry day is the weak case:**
+
+  | Rain in the 24 h before the origin | Windows | Precision | Recall |
+  | --- | --- | --- | --- |
+  | None (0 mm) | 19,755 | 0.715 | 0.168 |
+  | Below 1 mm | 15,468 | 0.512 | 0.499 |
+  | 1 mm or more | 34,665 | 0.813 | 0.946 |
+
+  The model relies on persistence; rain that starts after a dry day is rarely foreseen (recall 0.27 even at 0.36). Validation is the same (recall 0.166 after a dry day).
+- **Season:** F1 0.836 in May–October against 0.624 in November–April (recall 0.875 against 0.597).
+- **Location and hour of day:** F1 0.763 (HBI) to 0.789 (TUQ) across locations, and 0.764–0.788 across 6-hour origin periods: the differences are small.
+- **Calibration:** predicted probabilities follow the observed rain share closely (for example 0.86 predicted against 0.85 observed in the 0.8–0.9 bin, 0.36 against 0.40 in the 0.3–0.4 bin).
+
+Leakage notes: every feature uses data at or before the origin; the comparison grid and both rules were fixed on validation; the test figures for 0.36 and 0.50 are reported after the official test evaluation and must not be read as an independent test of a threshold chosen with test knowledge.
 
 ### Tree and rules of CART v1 (ID 30, 2026-10-21)
 
