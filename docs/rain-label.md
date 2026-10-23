@@ -154,6 +154,30 @@ Where the model errs on test at 0.40 (validation shows the same pattern):
 
 Leakage notes: every feature uses data at or before the origin; the comparison grid and both rules were fixed on validation; the test figures for 0.36 and 0.50 are reported after the official test evaluation and must not be read as an independent test of a threshold chosen with test knowledge.
 
+### Scoring DAG (ID 32, 2026-10-23)
+
+`weather_rain_scoring_dag` (`dags/dag_rain_scoring.py`, manual) scores the frozen CART v1 for an explicit window of UTC origin days: `validate_window` → `score_cart` (`scripts/score_cart.py`) → `publish_predictions` → `reconcile_predictions` (both `scripts/publish_predictions.py`, the last with `--check`). A non-zero exit fails the task, and the tasks after it do not run.
+
+- Artifact version: the model's SHA-256 must equal the one in the test evaluation (the corrected-label re-score), and the report's ordered features must equal the feature code. `dim_model` must hold the same SHA-256 and threshold. The DAG never registers or changes a model; ID 31 does that.
+- Window: test origins only, 2025-01-01 to 2025-12-30 UTC.
+  - Train and validation predictions are not published (decided 2026-10-21): train fitted the model and validation selected it.
+  - Origins on 2025-12-31 are refused, because their target ends in 2026, outside the scope.
+- Feature availability: features are recomputed from Silver Open-Meteo with the feature code (`compute_features`). Each uses only values at or before t, and 24 h of history is read before the window.
+  - A missing Silver object fails the run.
+  - An origin with a missing feature also fails the run, unless `--allow-missing`, which reports the origin and skips it.
+  - The scores stay retrospective: the publication latency of the reanalysis is not modelled.
+- Publication to Gold: `predictions/year=YYYY/month=MM/rain_predictions_cart_<YYYYMMDD>.parquet`, one object per origin day. An object is rewritten only when its content changes, and a day already holding another model version is refused.
+- Publication to the DW: one transaction, scoped to (model, window). Rows absent from Gold are deleted, new rows are inserted, and existing rows are updated only when a value differs, so an unchanged rerun rewrites nothing.
+- Check: compares keys, stored probability (4 decimals), class, threshold, window, and split.
+
+**Real run** (`manual__2026-10-23T10:29:00`, origins 2025-01-01 to 2025-12-30):
+
+- 4/4 tasks in 40 s; 69,888 origins scored.
+- The 364 Gold days had been written by a manual `score_cart.py` run minutes earlier; the DAG run found them unchanged.
+- DW: 0 inserted, 0 updated, 0 deleted, 69,888 unchanged; the check passed.
+- A checksum over every prediction row (including `predicted_at`), `dim_model`, and both observation facts was identical before and after. So the features recomputed from Silver (v2 rounding) reproduce the stored v1 predictions exactly.
+- A run for 2025-12-01 to 2025-12-31 failed at `validate_window`, and the later tasks did not run.
+
 ### Tree and rules of CART v1 (ID 30, 2026-10-21)
 
 `notebooks/cart_tree_rules.ipynb` checks that the model SHA-256 equals the one in `test_evaluation.json` before drawing anything. It shows the first 3 of 8 levels, every leaf as a merged rule with train rows and observed Rain share (corrected v0.2.1 labels), the importances, and four worked test-2025 examples chosen by fixed rules: largest-rain true positive, highest-probability false positive, largest-rain false negative, and a typical false negative. Thresholds are in original units; Open-Meteo rain has 0.1 mm resolution, so `≤ 0.05 mm` means no rain.

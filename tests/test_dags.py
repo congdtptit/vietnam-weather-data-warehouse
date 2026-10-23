@@ -8,6 +8,7 @@ def test_dags_import_and_order(dag_bag):
     assert set(dag_bag.dags) == {
         "open_meteo_ingest_to_bronze_dag",
         "weather_bronze_to_dw_dag",
+        "weather_rain_scoring_dag",
         "weather_system_healthcheck_dag",
     }
     dag = dag_bag.dags["open_meteo_ingest_to_bronze_dag"]
@@ -111,3 +112,40 @@ def test_every_dw_writing_task_waits_for_the_quality_gate(dag_bag):
         task = dag.get_task(task_id)
         assert "quality_gate" in task.get_flat_relative_ids(upstream=True)
         assert task.trigger_rule == "all_success"
+
+
+def test_scoring_dag_order_and_commands(dag_bag):
+    dag = dag_bag.dags["weather_rain_scoring_dag"]
+    assert dag.catchup is False and dag.schedule_interval is None and dag.max_active_runs == 1
+    down = {t.task_id: t.downstream_task_ids for t in dag.tasks}
+    assert down == {
+        "validate_window": {"score_cart"},
+        "score_cart": {"publish_predictions"},
+        "publish_predictions": {"reconcile_predictions"},
+        "reconcile_predictions": set(),
+    }
+    params = {"start_date": "2025-02-01", "end_date": "2025-02-28", "model_version": "v1"}
+    rendered = {
+        t: dag.get_task(t).render_template(dag.get_task(t).bash_command, {"params": params})
+        for t in ("score_cart", "publish_predictions", "reconcile_predictions")
+    }
+    for cmd in rendered.values():
+        assert "--start-date 2025-02-01 --end-date 2025-02-28 --version v1" in cmd
+        assert cmd.startswith("set -euo pipefail; python /opt/airflow/scripts/")
+    assert "score_cart.py" in rendered["score_cart"]
+    assert "--check" not in rendered["publish_predictions"]
+    assert rendered["reconcile_predictions"].endswith("--check")
+    assert all(t.retries == 0 for t in dag.tasks)
+
+
+@pytest.mark.parametrize(
+    "start, end",
+    [("2024-12-31", "2025-01-31"), ("2025-12-01", "2025-12-31"), ("2025-03-02", "2025-03-01")],
+)
+def test_scoring_dag_rejects_windows_outside_the_test_origins(dag_bag, start, end):
+    task = dag_bag.dags["weather_rain_scoring_dag"].get_task("validate_window")
+    with pytest.raises(ValueError, match="outside"):
+        task.python_callable(params={"start_date": start, "end_date": end, "model_version": "v1"})
+    task.python_callable(
+        params={"start_date": "2025-01-01", "end_date": "2025-12-30", "model_version": "v1"}
+    )
