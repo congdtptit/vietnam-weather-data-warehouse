@@ -15,8 +15,9 @@ Bronze (per docs/NAMING_CONVENTIONS.md), the received file unchanged:
   era5/timeseries/location=<CODE>/era5_timeseries_<CODE>_<YYYYMMDD>_<YYYYMMDD>.<zip|nc>
   era5/manifests/timeseries/location=<CODE>/era5_timeseries_<CODE>_<YYYYMMDD>_<YYYYMMDD>.json
 
-A location is current when its manifest exists and the stored bytes match its SHA-256; it is
-then skipped. A file whose variables or hourly time steps do not match the request, or whose
+A location is current when a stored series covers the requested window, its manifest records
+today's variables and coordinates, and the stored bytes match its SHA-256; it is then skipped
+(a 2016-2025 object also serves a run for one year). A file whose variables or hourly time steps do not match the request, or whose
 grid cell is not the one nearest the point, is a failure and is not stored.
 """
 
@@ -27,13 +28,16 @@ import hashlib
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import zipfile
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+import pandas as pd
 from ingest_era5 import VARIABLES, is_current, make_cds_client, request_id_of
+from ingest_era5 import _read as read_object
 from ingest_ghcnh import BUCKET_BRONZE, get_minio_client
 from ingest_open_meteo import NORTH_LOCATIONS
 from minio import Minio
@@ -67,22 +71,25 @@ def build_request(location: str, start_year: int, end_year: int) -> dict[str, An
     }
 
 
-def expected_hours(start_year: int, end_year: int) -> int:
-    start = datetime(start_year, 1, 1, tzinfo=timezone.utc)
-    end = datetime(end_year + 1, 1, 1, tzinfo=timezone.utc)
-    return int((end - start).total_seconds() // 3600)
+def requested_hours(request: dict[str, Any]) -> pd.DatetimeIndex:
+    """Every UTC hour of the request's date range (naive, as NetCDF valid_time decodes)."""
+    first, last = request["date"][0].split("/")
+    return pd.date_range(first, f"{last} 23:00", freq="h")
 
 
-def _inspect_netcdf(path: str, request: dict[str, Any], hours: int) -> dict[str, Any]:
-    import numpy as np
+def _inspect_netcdf(path: str, request: dict[str, Any]) -> dict[str, Any]:
     import xarray as xr
 
+    expected = requested_hours(request)
     with xr.open_dataset(path, engine="netcdf4") as ds:
         time_name = "valid_time" if "valid_time" in ds.coords else "time"
-        times = ds[time_name].values
-        if len(times) != hours or len(np.unique(times)) != hours:
+        times = pd.DatetimeIndex(ds[time_name].values)
+        missing, extra = expected.difference(times), times.difference(expected)
+        if len(times) != len(expected) or len(missing) or len(extra) or times.has_duplicates:
             raise ValueError(
-                f"{len(times)} time steps ({len(np.unique(times))} unique), expected {hours}"
+                f"time steps do not match the requested hours: {len(times)} steps, "
+                f"{len(missing)} missing (first {list(missing[:3].astype(str))}), "
+                f"{len(extra)} outside the request, duplicates {bool(times.has_duplicates)}"
             )
         lat, lon = float(ds["latitude"].values), float(ds["longitude"].values)
         point = request["location"]
@@ -95,7 +102,7 @@ def _inspect_netcdf(path: str, request: dict[str, Any], hours: int) -> dict[str,
         return {
             "variables": names,
             "time_coordinate": time_name,
-            "first_time": str(times.min()),
+            "first_time": str(times.min()),  # all requested hours, checked above
             "last_time": str(times.max()),
             "time_steps": int(len(times)),
             "grid_latitude": lat,
@@ -105,7 +112,7 @@ def _inspect_netcdf(path: str, request: dict[str, Any], hours: int) -> dict[str,
         }
 
 
-def inspect_download(path: str, request: dict[str, Any], hours: int) -> dict[str, Any]:
+def inspect_download(path: str, request: dict[str, Any]) -> dict[str, Any]:
     """Check a download (one NetCDF, or a zip of NetCDF files) against its request."""
     members = []
     if zipfile.is_zipfile(path):
@@ -125,7 +132,7 @@ def inspect_download(path: str, request: dict[str, Any], hours: int) -> dict[str
                         "name": info.filename,
                         "bytes": len(body),
                         "sha256": hashlib.sha256(body).hexdigest(),
-                        **_inspect_netcdf(member_path, request, hours),
+                        **_inspect_netcdf(member_path, request),
                     }
                 )
     else:
@@ -137,7 +144,7 @@ def inspect_download(path: str, request: dict[str, Any], hours: int) -> dict[str
                 "name": None,
                 "bytes": len(body),
                 "sha256": hashlib.sha256(body).hexdigest(),
-                **_inspect_netcdf(path, request, hours),
+                **_inspect_netcdf(path, request),
             }
         )
     found = [v for m in members for v in m["variables"]]
@@ -149,6 +156,37 @@ def inspect_download(path: str, request: dict[str, Any], hours: int) -> dict[str
     return {"format": fmt, "members": members}
 
 
+MANIFEST_NAME = re.compile(r"era5_timeseries_([A-Z]{3})_(\d{4})0101_(\d{4})1231\.json$")
+
+
+def same_request(manifest: dict[str, Any], location: str) -> bool:
+    """The stored request asked for today's variables at today's point coordinates."""
+    stored, now = manifest.get("request", {}), build_request(location, 2016, 2016)
+    return stored.get("variable") == now["variable"] and stored.get("location") == now["location"]
+
+
+def find_current(client: Minio, location: str, start_year: int, end_year: int) -> dict | None:
+    """Manifest of a stored, checksum-valid series covering the window, or None.
+
+    Any stored window that contains [start_year, end_year] is reused (narrowest first), so a
+    run for one year does not request again what a 2016-2025 object already holds. The stored
+    request must match today's variables and coordinates."""
+    prefix = f"era5/manifests/timeseries/location={location}/"
+    candidates = []
+    for obj in client.list_objects(BUCKET_BRONZE, prefix=prefix, recursive=True):
+        m = MANIFEST_NAME.search(obj.object_name)
+        if m and m[1] == location and int(m[2]) <= start_year and int(m[3]) >= end_year:
+            candidates.append((int(m[3]) - int(m[2]), obj.object_name))
+    for _, key in sorted(candidates):
+        body = read_object(client, key)
+        if body is None:
+            continue
+        manifest = json.loads(body)
+        if same_request(manifest, location) and is_current(client, key):
+            return manifest
+    return None
+
+
 def ingest_location(
     location: str, start_year: int, end_year: int, get_cds: Callable[[], Any], client: Minio
 ) -> str:
@@ -158,8 +196,9 @@ def ingest_location(
     needs no credentials."""
     tag = f"  ERA5 time series {location} {start_year}-{end_year}"
     _, manifest_key = bronze_keys(location, start_year, end_year)
-    if is_current(client, manifest_key):
-        print(f"{tag}: current (manifest and checksum match), skipping", flush=True)
+    stored = find_current(client, location, start_year, end_year)
+    if stored is not None:
+        print(f"{tag}: covered by current {stored['object_key']}, skipping", flush=True)
         return "skipped"
     request = build_request(location, start_year, end_year)
     with tempfile.TemporaryDirectory() as tmp:
@@ -167,7 +206,7 @@ def ingest_location(
         result = get_cds().retrieve(DATASET, request)  # waits for the job
         result.download(target)
         retrieved_at = datetime.now(timezone.utc).isoformat()
-        summary = inspect_download(target, request, expected_hours(start_year, end_year))
+        summary = inspect_download(target, request)
         with open(target, "rb") as fh:
             raw = fh.read()
     is_zip = summary["format"] == "zip"

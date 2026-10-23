@@ -302,3 +302,38 @@ def test_gold_station_key_is_a_nullable_integer():
     assert str(df["station_key"].dtype) == "Int64"
     keys = df.set_index("source_name")["station_key"]
     assert keys["Meteostat"] == 7 and pd.isna(keys["Open-Meteo"])
+
+
+def test_a_month_with_open_meteo_and_era5_loads_each_source_once():
+    from types import SimpleNamespace
+
+    import transform_era5_to_silver as era5
+    from load_gold_observations import era5_silver_key, open_meteo_silver_key
+
+    ts = pd.Timestamp("2024-05-01 00:00:00", tz="UTC")
+    base = {
+        "location_code": "HAN",
+        "timestamp_utc": ts,
+        "temperature_c": 25.0,
+        "pressure_type": "surface",
+        "observation_type": "model_reanalysis",
+    }
+    bodies = {}
+    for key, source in (
+        (open_meteo_silver_key("HAN", 2024, 5), "Open-Meteo"),
+        (era5_silver_key("HAN", 2024, 5), "ERA5"),
+    ):
+        buf = io.BytesIO()
+        pd.DataFrame([{**base, "source_name": source}]).to_parquet(buf, index=False)
+        bodies[key] = buf.getvalue()
+    client = Mock()
+    client.list_objects.side_effect = lambda bucket, prefix, recursive=False: [
+        SimpleNamespace(object_name=k) for k in bodies if k.startswith(prefix)
+    ]
+    client.get_object.side_effect = lambda bucket, key: SimpleNamespace(
+        read=lambda: bodies[key], close=lambda: None, release_conn=lambda: None
+    )
+    df = process_month_observations(client, 2024, 5, {"HAN": 1}, {"Open-Meteo": 1, "ERA5": 2}, {})
+    assert sorted(df["source_key"]) == [1, 2]  # one row per source, nothing read twice
+    assert df["station_key"].isna().all() and set(df["pressure_type"]) == {"surface"}
+    assert era5_silver_key("HAN", 2024, 5) == era5.silver_key("HAN", 2024, 5)
