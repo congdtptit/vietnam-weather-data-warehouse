@@ -22,11 +22,18 @@ Outputs (bucket gold):
   ml_models/cart_rain_next24h_<version>/report.json    parameters, features, threshold,
                                                        grid results, validation metrics
 Load model.joblib only from this trusted bucket: joblib files can execute code on load.
+
+Released models (RELEASED_MODELS) keep their name: training under a released version is
+refused unless it uses the release's feature version, and the result is written only when
+it reproduces the released bytes (SHA-256). Found by the clean-machine rerun (ID 34): on an
+empty data lake the defaults (features v2, version v1) would otherwise store a different
+model as v1. Train new models under a new --version.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import itertools
 import json
@@ -51,6 +58,13 @@ from station_config import CANONICAL_LOCATIONS
 
 MODEL_NAME = "DecisionTree_CART"
 MODEL_VERSION = "v1"
+# Models evaluated once on test 2025 and loaded into the DW (dim_model.artifact_sha256)
+RELEASED_MODELS: dict[str, dict[str, str]] = {
+    "v1": {
+        "feature_version": "v1",
+        "model_sha256": "1f667b91365752a25f1cad0b31258ea39b9d4bd5a17c2d8faa4939260cd494b6",
+    },
+}
 RANDOM_STATE = 42
 F1_TOLERANCE = 0.005
 DEFAULT_GRID: dict[str, list[Any]] = {
@@ -61,6 +75,29 @@ DEFAULT_GRID: dict[str, list[Any]] = {
 }
 THRESHOLDS = [round(x, 2) for x in np.arange(0.30, 0.701, 0.02)]
 ALLOWED_SPLITS = ("train", "validation")  # test stays unread until ID 29
+
+
+def check_release(version: str, feature_version: str, model_bytes: bytes | None = None) -> None:
+    """Refuse to create or use a released version from other inputs or other bytes."""
+    released = RELEASED_MODELS.get(version)
+    if released is None:
+        return
+    if feature_version != released["feature_version"]:
+        raise ValueError(
+            f"model {version} is released and was trained on features "
+            f"{released['feature_version']}; features {feature_version} would give a different "
+            f"model under its name. Use a new --version"
+        )
+    if (
+        model_bytes is not None
+        and hashlib.sha256(model_bytes).hexdigest() != released["model_sha256"]
+    ):
+        raise ValueError(f"model bytes differ from released {version} (SHA-256); nothing written")
+
+
+def released_version_of(model_bytes: bytes) -> str | None:
+    sha = hashlib.sha256(model_bytes).hexdigest()
+    return next((v for v, r in RELEASED_MODELS.items() if r["model_sha256"] == sha), None)
 
 
 def model_keys(version: str = MODEL_VERSION) -> tuple[str, str]:
@@ -219,6 +256,7 @@ def train_cart(
             f"model {version} is frozen ({evaluation_key} exists); use a new --version"
         )
     refuse_overwrite(client, [model_key, report_key], overwrite)
+    check_release(version, feature_version)
     manifest = read_feature_manifest(client, feature_version)
     features = [f["name"] for f in manifest["features"]]
     train, train_dropped = drop_missing(read_split(client, "train", feature_version), features)
@@ -250,6 +288,7 @@ def train_cart(
     buf = io.BytesIO()
     joblib.dump(model, buf)
     data = buf.getvalue()
+    check_release(version, feature_version, data)
     client.put_object(BUCKET_GOLD, model_key, io.BytesIO(data), len(data))
 
     report = {
@@ -299,6 +338,8 @@ def train_cart(
         "objects": {
             "model": f"{BUCKET_GOLD}/{model_key}",
             "model_bytes": len(data),
+            "model_sha256": hashlib.sha256(data).hexdigest(),
+            "reproduces_released_version": released_version_of(data),
             "report": f"{BUCKET_GOLD}/{report_key}",
         },
     }

@@ -40,6 +40,7 @@ from train_cart import (
     MODEL_VERSION,
     _get,
     baselines,
+    check_release,
     classification_metrics,
     drop_missing,
     model_keys,
@@ -105,6 +106,7 @@ def evaluate_test(version: str = MODEL_VERSION, client: Minio | None = None) -> 
 
     report = json.loads(_get(client, report_key))
     model_bytes = _get(client, model_key)
+    check_release(version, report["feature_version"], model_bytes)  # test only for the release
     model = joblib.load(io.BytesIO(model_bytes))
     features = [f["name"] for f in report["features"]]
     threshold = float(report["probability_threshold"])

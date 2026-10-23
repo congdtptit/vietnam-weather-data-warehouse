@@ -5,10 +5,18 @@ import json
 
 import pandas as pd
 import pytest
+import train_cart as train_cart_module
 from build_rain_features import features_keys
 from evaluate_cart_test import evaluate_test, evaluation_keys
 from rescore_cart_corrected_labels import corrected_evaluation_key, rescore
 from test_evaluate_cart_test import _trained_client
+
+
+@pytest.fixture(autouse=True)
+def no_release_pins(monkeypatch):
+    """Synthetic models reuse the name v1; the pins of the real release are tested in
+    tests/test_model_release.py."""
+    monkeypatch.setattr(train_cart_module, "RELEASED_MODELS", {})
 
 
 def _relabel(store, key, flip_rows):

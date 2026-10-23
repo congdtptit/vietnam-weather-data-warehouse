@@ -9,6 +9,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import pytest
+import train_cart as train_cart_module
 from build_rain_features import FEATURES, features_keys
 from minio.error import S3Error
 from train_cart import (
@@ -21,6 +22,13 @@ from train_cart import (
 )
 
 LOCS = ["HAN", "LCA"]
+
+
+@pytest.fixture(autouse=True)
+def no_release_pins(monkeypatch):
+    """Synthetic models reuse the name v1; the pins of the real release are tested in
+    tests/test_model_release.py."""
+    monkeypatch.setattr(train_cart_module, "RELEASED_MODELS", {})
 
 
 def _split(split, start, hours, seed):
