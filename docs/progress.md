@@ -1283,8 +1283,27 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
   - One grid cell per location over the 10 years, for example HAN 21.05448, 105.898476, 19 m; LCA 22.460455, 103.98964, 92 m.
   - Downstream, all on the real 2016–2025 data:
     - `quality_gate.py` 2016–2025: 1,032 checks, 0 failed, 0 warnings.
-    - `load_gold_observations.py` 2016–2025: 301.6 s, 0 failures; the Gold monthly objects now carry the Open-Meteo grid columns.
+    - `load_gold_observations.py` 2016–2025: 301.6 s, 0 failures. The Gold monthly objects keep only the fact columns, so the grid columns do not reach Gold. Corrected during ID 16: this line first said that Gold now carried them.
     - `reconcile_dw.py`: 1,490,237 = 1,490,237 hourly, 17,866 = 17,866 daily (`gold/quality_reports/reconcile_2016_2025_20261023T122150Z.json`).
     - DW fingerprint identical (the loader inserts named columns only).
     - `score_cart.py` 2025: 364 Gold prediction days unchanged.
 - Limits: labels and features v2 were built before this change. They read only named columns, so rebuilding them would give the same values; they were not rebuilt.
+
+## Gold ML multi-source pivot (ID 16) — 2026-10-23
+
+- Related work: workbook ID 16 ("Gộp Silver → Gold, pivot các nguồn cho ML", 80%: Gold observations held all three sources, but no pivot existed). Roadmap criterion: separate observation and ML contracts, preserved source identity, pivot cardinality, lineage. Business requirements §6: pivots must not erase source identity or sum rain across sources. Read-only for the DW.
+- Changes:
+  - New `scripts/build_ml_pivot.py`:
+    - Reads the 12 Gold observation months of each year and pivots them to one row per `location_code` × `timestamp_utc`, keeping the local `date_key`/`time_key`.
+    - Columns `<variable>__<source>` for the 8 fact measures × Open-Meteo, ERA5, Meteostat (24 columns). Values are never combined; missing stays missing.
+    - Checks before writing; nothing is written if one fails:
+      - the key is unique and the rows equal the distinct Gold keys;
+      - per source, the rows with values equal its Gold rows;
+      - per source × variable, the non-null count and sum equal Gold;
+      - per source × UTC year, the Gold rows equal `fact_weather_observation` (read-only SQL).
+    - Writes one object per year plus a manifest (grain, key, source policy, column units, pressure type per column, counts, Gold object SHA-256 lineage). Refuses to overwrite a version unless `--overwrite`.
+  - Tests: new `tests/test_build_ml_pivot.py` (8: grain and naming, rain kept per source, missing hours stay missing, reconcile catches a changed value, unknown source and duplicate rows rejected, build writes once and refuses a second write, a DW mismatch writes nothing, window limits).
+  - Docs: data contract (layers), `docs/NAMING_CONVENTIONS.md`, `docs/business-requirements.md` §6, `docs/architecture.md`, `README.md`. Correction to the ID 10 entry above: the Gold monthly objects keep only the fact columns, so the Open-Meteo grid columns are not in Gold (the entry first said they were).
+- Checks: `ruff`; `make test` → 254 passed; `make test-integration` → 22 passed.
+- Real run `build_ml_pivot.py --start-year 2016 --end-year 2025` (15 s): 701,376 rows (70,080 or 70,272 per year = 8 locations × the hours of the year). Open-Meteo and ERA5 701,376 each; Meteostat 87,485 (HAN only). Every per-source, per-variable, and per-year check against Gold and the DW passed. Manifest `gold/ml_pivot/weather_hourly_by_source_v1.json`. DW fingerprint unchanged.
+- Limits: GHCNh daily station rain has a daily grain and is not in this hourly pivot. No model uses the pivot yet; a multi-source model would need its own feature and leakage review (`docs/rain-label.md`).

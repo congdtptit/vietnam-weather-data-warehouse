@@ -20,7 +20,7 @@ flowchart TD
     AF -.-> ML
 ```
 
-Observations retain separate sources. Gold for DW and Gold for ML have different grains; source pivots for ML do not change the observation fact grain.
+Observations retain separate sources. Gold for DW and Gold for ML have different grains; source pivots for ML do not change the observation fact grain. The multi-source pivot `gold/ml_pivot/weather_hourly_by_source_v1` (ID 16) is built from the Gold observation months and reconciled with them and with the DW.
 
 ## Components and current implementation
 

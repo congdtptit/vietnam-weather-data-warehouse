@@ -99,6 +99,11 @@ Do not merge different variables such as direct-normal irradiance and shortwave 
 - Target Bronze preserves original source bytes. Retrieval metadata belongs separately or in object metadata/manifests: source/product, secret-free request, retrieval time, checksum, coverage, and version. Open-Meteo, GHCNh, ERA5, and boundaries comply since 2026-10-22, Meteostat since 2026-10-23: the received `.csv.gz` with a manifest per station-year (URL, HTTP status, retrieval time, upstream Last-Modified, SHA-256 of the received and of the decompressed bytes, line count). A station-year the archive does not have also gets a manifest (HTTP 404), so reruns do not request it again (`--recheck-missing` asks again). The Silver transform reads Bronze only through the manifest: a missing manifest or a checksum mismatch fails the station-year, and a 404 manifest means no data.
 - Silver retains source, units, canonical time, location/station mapping, lineage, and quality flags. Additional column names require agreement; do not imply existing code supports them.
 - Gold observations preserve the multi-source grain. ML pivot/fusion datasets have their own grain, feature names, and explicit source policy. Future labels belong to ML datasets, not automatically to observation facts.
+- Implemented 2026-10-23 (ID 16): `scripts/build_ml_pivot.py` builds `gold/ml_pivot/weather_hourly_by_source_v1/`.
+  - Grain and columns: one row per location × UTC hour, built from the Gold observation months. Columns `<variable>__<source>` cover the 8 fact measures for Open-Meteo, ERA5, and Meteostat, plus the local `date_key`/`time_key`.
+  - Source policy: no value is combined across sources, missing stays missing, and the manifest records the pressure type per column.
+  - Checks before writing: unique key; rows, non-null counts, and sums per source and variable equal Gold; rows per source × year equal the DW.
+  - CART v1 does not use it.
 - Follow [naming conventions](NAMING_CONVENTIONS.md); update consumers together with key/schema changes.
 
 ## Missing data, duplicates, and quality
