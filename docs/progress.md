@@ -1362,7 +1362,7 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
 - Limits:
   - Same laptop and Docker as the original, not a second machine; the Airflow base image was not re-pulled.
   - The model was not retrained from today's labels: v1 comes from its release (see above).
-  - The clean stack (containers, volumes `weather_clean_*`, image `weather-airflow-clean`, clone in the session scratchpad) is still present until the user agrees to remove it.
+  - The clean stack (containers, volumes `weather_clean_*`, image `weather-airflow-clean`, clone in the session scratchpad) was kept until the user agreed to remove it. Removed on 2026-10-23 evening (`docker compose -p weather_clean down -v`, `docker image rm weather-airflow-clean:2.9.3-python3.10`, clone deleted): 6 containers, 2 volumes, 1 network, 1 image; Docker volumes went from 7.0 to 5.3 GB and images from 27.0 to 26.3 GB. The main stack was not touched (still running, `fact_weather_observation` 1,490,237 rows). The small comparison files from the run stay in the scratchpad.
 
 ## Workbook statuses after the final check of completed tasks — 2026-10-23
 
