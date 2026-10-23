@@ -21,7 +21,7 @@ Cập nhật ngày **2026-10-23**. Bằng chứng chi tiết (lệnh đã chạy
 - Bronze Meteostat (task 9, từ 23/10) lưu nguyên file `.csv.gz` nhận về kèm manifest; ghi lại cả các năm không có dữ liệu (HTTP 404) nên lần sau không hỏi lại. Vì vậy DAG chạy lại các năm đã có dữ liệu không cần Internet (đã thử 23/10 trong container không có mạng: 13/13 bước thành công).
 - Gán trạm theo khoảng cách bằng GeoPandas (task 11, `scripts/assign_stations_geo.py`): tính khoảng cách trên hệ tọa độ UTM 48N, tìm trạm gần nhất trong 30 km và kiểm tra tỉnh của từng điểm. Kết quả khớp bảng trạm đang dùng và `dim_station` (chỉ đọc, không đổi DW).
 - Mưa ngày tại trạm từ NOAA GHCNh (5 trạm) → bảng riêng `fact_station_daily_rain`, kèm view so sánh với Open-Meteo.
-- View OLAP giờ/ngày/tháng/năm và độ phủ (`sql/02_olap_views.sql`); hướng dẫn dựng Power BI v1 (`docs/powerbi-dashboard-v1.md`). File PBIX chưa có.
+- View OLAP giờ/ngày/tháng/năm và độ phủ (`sql/02_olap_views.sql`); hướng dẫn dựng Power BI 8 trang (`docs/powerbi-dashboard-v1.md`, ngày 23/10 thêm mô tả chi tiết từng trang: biểu đồ, trường, số kiểm tra). File PBIX chưa có.
 - Nhãn RainNext24h (ngưỡng 1 mm, chia train/validation/test theo năm UTC, purge biên) xuất ra Gold ML; notebook EDA `notebooks/eda_rain_next24h.ipynb` với môi trường riêng (`make notebook-setup`); bộ 22 đặc trưng không rò rỉ dữ liệu tương lai trong `gold/ml_features/` (3 file theo tập train/validation/test); mô hình CART v1 đã train, chọn tham số trên validation 2024 và đánh giá một lần trên test 2025 (F1 0,777, Recall 0,792 với nhãn đã sửa lỗi làm tròn ngày 22/10; mốc dự báo theo hiện trạng F1 0,729); hình cây và luật trong `notebooks/cart_tree_rules.ipynb`; dự đoán test 2025 đã nạp vào `fact_weather_prediction` cùng `dim_model` và view `vw_prediction_vs_actual`.
 - So sánh ngưỡng và phân tích lỗi mô hình (task 36, `scripts/analyze_cart_thresholds.py`): ngưỡng chính thức 0,40 giữ nguyên; điểm ưu tiên Recall 0,36 chọn trên validation, số liệu trên test chỉ là phân tích làm sau.
 - DAG chấm điểm dự báo `weather_rain_scoring_dag` (task 32): tính lại đặc trưng từ Silver cho một khoảng ngày của tập test 2025, chấm điểm bằng CART v1 đã đóng băng (kiểm tra SHA-256 với `dim_model`), ghi dự báo vào Gold rồi vào DW (dòng không đổi thì không ghi lại), sau đó đối chiếu DW với Gold. Chạy thật cả năm 2025 ngày 23/10: 69.888 dự báo, DW không thay đổi.
@@ -48,7 +48,7 @@ Dữ liệu thực 2016–2025 đã được dựng lại trên một máy cục
 | [Rain label](docs/rain-label.md) | RainNext24h, chống leakage và validation/test |
 | [Naming conventions](docs/NAMING_CONVENTIONS.md) | Bucket, object key và phân vùng |
 | [Task specs tuần 2–5](docs/task-specs-weeks-2-5.md) | Đặc tả nghiệp vụ các task 4, 5, 8, 9, 17, 19, 20 |
-| [Power BI v1](docs/powerbi-dashboard-v1.md) | Hướng dẫn dựng dashboard từ view OLAP |
+| [Power BI](docs/powerbi-dashboard-v1.md) | Hướng dẫn dựng 8 trang dashboard: mô hình, DAX, biểu đồ từng trang, số đối chiếu |
 | [Reproduce from scratch](docs/reproduce-from-scratch.md) | Các lệnh dựng lại toàn bộ dự án trên máy mới (đã chạy thật ngày 23/10, task 34) |
 | [Progress](docs/progress.md) | Bằng chứng đã thực hiện, kết quả kiểm tra và hạn chế |
 | [AGENTS.md](AGENTS.md) | Hướng dẫn làm việc trong repository cho AI |
