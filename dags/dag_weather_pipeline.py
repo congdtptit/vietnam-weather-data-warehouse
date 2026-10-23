@@ -1,9 +1,10 @@
 """dags/dag_weather_pipeline.py.
 
 Bronze -> Silver -> Gold -> DW for an explicit window of UTC years (workbook ID 17;
-specification in docs/task-specs-weeks-2-5.md section 5). Manual trigger only; incremental
-scheduling is ID 25. Hourly observations (Open-Meteo, Meteostat, and since 2026-10-23 ERA5
-point time series) go to fact_weather_observation; GHCNh daily station rain goes to fact_station_daily_rain.
+specification in docs/task-specs-weeks-2-5.md section 5). No schedule of its own: it runs when
+triggered by hand or by weather_incremental_dag (ID 25) for a watermark window. Hourly
+observations (Open-Meteo, Meteostat, and since 2026-10-23 ERA5 point time series) go to
+fact_weather_observation; GHCNh daily station rain goes to fact_station_daily_rain.
 
 Each task runs an existing script; a non-zero exit fails the task. Ingestion skips objects
 whose manifest and checksum are current, transforms rewrite Silver for the window,

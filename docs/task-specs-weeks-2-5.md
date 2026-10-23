@@ -156,7 +156,7 @@ ingest_meteostat  ─┼─> transform_open_meteo_to_silver ─┐
 
 **Business rules.**
 
-- Window parameters, not `now()`; manual trigger with `start_year`/`end_year`; catchup off. Incremental scheduling is ID 25.
+- Window parameters, not `now()`; manual trigger with `start_year`/`end_year`; catchup off. Incremental scheduling is ID 25 (implemented 2026-10-23 as a separate DAG that triggers this one; see below).
 - Each task fails visibly when its script exits non-zero (the scripts already return non-zero on recorded failures).
 - Bounded retries for transient network errors only; no retries for configuration errors.
 - A final `reconcile` task checks DW row counts per source × location × year against Silver and fails on a mismatch.
@@ -169,6 +169,19 @@ ingest_meteostat  ─┼─> transform_open_meteo_to_silver ─┐
 **Implemented 2026-10-22.** `dags/dag_weather_pipeline.py` (`weather_bronze_to_dw_dag`) and `scripts/reconcile_dw.py`. Parameters `start_year`, `end_year` (2016–2025, checked by a first `validate_window` task) and optional `location`; `schedule=None`, `catchup=False`, `max_active_runs=1`; one retry after 2 minutes for the two ingestion tasks only; transforms run with `--overwrite`. The GHCNh daily-rain chain was added the same day (`ingest_ghcnh` → `transform_ghcnh_to_silver` → `load_station_daily_rain`, with a `--location` option on the three scripts), and `reconcile` also compares daily rain per station × year. Deviations from this section: the smallest window is one year (optionally one location), not one month (decision below); boundaries and ERA5 are not part of this DAG. Acceptance run on 2026-10-22: 2016–2025, all locations, no download, 3 min 43 s, reconciliation 788,861 = 788,861 hourly rows and 17,866 = 17,866 station-days. Evidence (runs, rerun, failure and resume): [progress](progress.md).
 
 **Added 2026-10-22 (ID 24).** A `quality_gate` task now runs after the three Silver transforms and before `seed_dimensions`, so no DW table is written when Silver breaks a contract rule. Blocking checks and the warning thresholds (decided 2026-10-22) are listed in the [data contract](data-contract.md#decision-status). Runs: 2016–2025 standalone (712 checks, 0 failed, 0 warnings) and DAG runs 2024 × HAN (12/12 tasks); an integration test runs the DAG's own `quality_gate` command in a `BashOperator` against a disposable MinIO and sees it fail on bad Silver. Evidence: [progress](progress.md).
+
+**Added 2026-10-23 (ID 25).** `dags/dag_weather_incremental.py` (`weather_incremental_dag`) makes the pipeline incremental without changing it. Design:
+
+- Schedule `@daily`, catchup off, paused at creation, `max_active_runs=1`.
+- Tasks: `plan_window` → `run_window` → `advance_watermark`.
+  - `plan_window` reads the watermark `gold/pipeline_state/weather_bronze_to_dw_watermark.json` (`scripts/pipeline_watermark.py`): the last UTC year committed and reconciled.
+  - It plans the year after it plus `lookback_years` (default 1) committed years, re-processed for late corrections, with at most `max_years` (default 1) new years and never after 2025. When 2025 is committed, it skips the rest.
+  - `run_window` triggers this DAG for the window and waits for it.
+  - `advance_watermark` runs only after that run succeeded, which requires `reconcile`. It moves the watermark only from the value the run was planned on.
+- Overlapping windows are safe because this DAG replaces each window and the DW keys are unique.
+- The schedule only decides how often to look for new data; the window comes from the watermark. Windows stay whole UTC years (the decision above).
+
+Evidence (2026-10-23, real data): with the watermark set to 2024 by hand, the first scheduled run replayed 2024–2025 and advanced it to 2025. The DW was identical afterwards, and a second run skipped. Details: [progress](progress.md).
 
 **Known constraint.** The last full Gold load took 292 s (DQ report `dq_report_gold_load_20261021_020704.json`; an earlier version of this line said 3,493 s, which was not supported by any run artifact; corrected 2026-10-22). The DAG should run per year so that one slow or failed year can be retried alone.
 

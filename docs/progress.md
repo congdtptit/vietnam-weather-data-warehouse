@@ -1179,3 +1179,39 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
   - DW checksum (md5 over every row of `fact_weather_prediction` including `prediction_id` and `predicted_at`, `dim_model`, `fact_weather_observation` business columns, `fact_station_daily_rain`) identical before and after: the Power BI data is unchanged.
   - Failure run `manual__2026-10-23T10:30:05` (2025-12-01..2025-12-31): `validate_window` failed, the other three tasks `upstream_failed`.
 - Limits: scoring covers test origins only (train and validation are not published, decided 2026-10-21); Gold predictions have no model version in the path, so a second model needs a path decision first; scores are retrospective (reanalysis publication latency not modelled); the DAG is manual (scheduling belongs to ID 25).
+
+## Incremental DAG with a watermark (ID 25) — 2026-10-23
+
+- Related work: workbook ID 25 ("DAG cập nhật tăng dần (incremental)", output "DAG chạy theo lịch"); roadmap criterion: data intervals/windows, watermarks after commit, late-data lookback, duplicate-free overlapping reruns. `dags/AGENTS.md`: windows not wall clock; advance watermarks only after publication/commit. The DW data behind the Power BI package had to stay unchanged.
+- Design (implemented, not a team decision):
+  - The pipeline (`weather_bronze_to_dw_dag`, ID 17) is unchanged. A new DAG plans windows and triggers it.
+  - Windows are whole UTC years, because every pipeline script works by year (decision of 2026-10-22, task specs §5).
+  - The watermark is the last year committed and reconciled.
+  - Each run takes the next year plus a one-year lookback (default) for late corrections, and never goes past 2025.
+  - The schedule only sets how often the DAG looks; the window comes from the watermark.
+- Changes:
+  - New `scripts/pipeline_watermark.py`: `plan_window`; `advance`, which refuses when the watermark moved since planning, a window outside 2016–2025, or a window that does not move it forward; `set_watermark` (by hand, reason required); CLI `show`, `plan`, `set`. Object `gold/pipeline_state/weather_bronze_to_dw_watermark.json`.
+  - New `dags/dag_weather_incremental.py` (`weather_incremental_dag`; `@daily`, `catchup=False`, `is_paused_upon_creation=True`, `max_active_runs=1`, retries 0; params `lookback_years` 0–2, `max_years` 1–10):
+    - `plan_window` (ShortCircuitOperator; skips the rest when nothing is new);
+    - `run_window` (TriggerDagRunOperator to the pipeline, `wait_for_completion`, allowed `success`, failed `failed`, run id `incremental__<run_id>`);
+    - `advance_watermark` (`all_success`).
+  - `dags/dag_weather_pipeline.py`: docstring only.
+  - Tests: new `tests/test_pipeline_watermark.py` (14: window rule cases including the 2016 and 2025 limits, nothing to plan after 2025, bad parameters, advance only from the planned base, set by hand, DAG order and settings, plan task conf or skip, advance task records the pipeline run); `tests/test_dags.py` DAG list.
+  - Docs: task specs §5 (ID 25 paragraph), `docs/architecture.md`, `docs/NAMING_CONVENTIONS.md` (pipeline state row), `dags/AGENTS.md`, `README.md`.
+- Checks: `ruff check` and `ruff format --check` passed; `make test` → 232 passed, 22 deselected; `make test-integration` → 22 passed.
+- Real run (live stack; DW fingerprint before = after ID 32):
+  1. The new DAG was parsed paused (the stack sets `DAGS_ARE_PAUSED_AT_CREATION=false`; the DAG overrides it).
+  2. Watermark set by hand to 2024, with the reason recorded: the DW already held 2016–2025, reconciled by `manual__2026-10-23T07:24:22`; 2025 was replayed as the new year.
+  3. Unpaused: the scheduler created `scheduled__2026-10-22T00:00:00+00:00` (data interval 2026-10-22 to 2026-10-23), which planned 2024–2025 (new 2025, lookback 2024).
+     - It triggered `incremental__scheduled__2026-10-22T00:00:00+00:00`: 14/14 tasks on the first try, 181 s.
+     - Ingestion stored nothing: Open-Meteo 16 skipped by manifest, Meteostat 4 existing and 4 upstream 404, GHCNh 10 skipped, ERA5 8 covered.
+     - Quality gate: 208 checks, 0 failed, 0 warnings (`silver/quality_reports/quality_gate_2024_2025_20261023T103814Z.json`).
+     - `load_gold_observations` 82.9 s; reconcile 34 groups, Silver 298,192 = DW 298,192 hourly, 3,573 = 3,573 station-days (`gold/quality_reports/reconcile_2024_2025_20261023T104000Z.json`).
+     - `advance_watermark` moved the watermark to 2025, recording the window, the pipeline run, and the previous value 2024.
+  4. DW fingerprint after: identical. That fingerprint is the md5 over the business columns of all 1,490,237 observation rows ordered by key, all daily-rain rows, every prediction row including `predicted_at`, and `dim_model`. So the overlapping re-processing of 2024 and 2025 created no duplicate and changed no value.
+  5. A second run (`manual__2026-10-23T10:41:22`) logged "Up to date: committed through 2025; nothing to load"; `run_window` and `advance_watermark` were skipped.
+  6. The DAG was paused again; the watermark stays at 2025.
+- Limits:
+  - A failed pipeline run leaving the watermark unchanged is covered by the trigger rule and the DAG test, not by a live failure. The Airflow behaviour itself (a failed task stops its downstream tasks) was shown live in the ID 17 and ID 32 failure runs.
+  - The scope is closed at 2025, so after the first run each scheduled run is a no-op.
+  - The lookback unit is a whole year.

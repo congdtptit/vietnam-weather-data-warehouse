@@ -8,6 +8,7 @@ def test_dags_import_and_order(dag_bag):
     assert set(dag_bag.dags) == {
         "open_meteo_ingest_to_bronze_dag",
         "weather_bronze_to_dw_dag",
+        "weather_incremental_dag",
         "weather_rain_scoring_dag",
         "weather_system_healthcheck_dag",
     }

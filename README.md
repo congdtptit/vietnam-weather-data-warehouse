@@ -12,7 +12,7 @@ Cập nhật ngày **2026-10-23**. Bằng chứng chi tiết (lệnh đã chạy
 
 - Docker Compose cho MinIO, PostgreSQL và Airflow (đã kiểm chứng webserver, scheduler và một lần chạy DAG kiểm tra ngày 22/10); Dockerfile Airflow 2.9.3/Python 3.10 với dependency được khóa phiên bản và checksum.
 - Khởi tạo bucket Bronze/Silver/Gold, DDL Star Schema và seed dimension; danh mục trạm đã xác minh trong `scripts/station_config.py`.
-- ETL bằng script: Open-Meteo, Meteostat và ERA5 → Bronze → Silver → Gold → `fact_weather_observation`. Meteostat chỉ giữ giá trị quan trắc (loại giá trị mô hình dự báo). DAG `weather_bronze_to_dw_dag` (task 17) chạy trọn Bronze → Silver → Gold → DW theo năm cho Open-Meteo, Meteostat, ERA5 và mưa ngày GHCNh, có bước kiểm tra chất lượng Silver chặn trước khi ghi DW (task 24: dừng khi sai khóa, trùng, UTC, khoảng giá trị hợp lệ hoặc thiếu giờ Open-Meteo/ERA5; cảnh báo không dừng khi độ phủ, % thiếu hoặc giá trị bất thường vượt ngưỡng đã chốt ngày 22/10), rồi đối chiếu số dòng DW với Silver; đã chạy cho cả 2016–2025 (ngày 23/10, có ERA5: khớp 1.490.237 dòng giờ và 17.866 ngày mưa); chạy tay, chưa có lịch tăng dần (task 25).
+- ETL bằng script: Open-Meteo, Meteostat và ERA5 → Bronze → Silver → Gold → `fact_weather_observation`. Meteostat chỉ giữ giá trị quan trắc (loại giá trị mô hình dự báo). DAG `weather_bronze_to_dw_dag` (task 17) chạy trọn Bronze → Silver → Gold → DW theo năm cho Open-Meteo, Meteostat, ERA5 và mưa ngày GHCNh, có bước kiểm tra chất lượng Silver chặn trước khi ghi DW (task 24: dừng khi sai khóa, trùng, UTC, khoảng giá trị hợp lệ hoặc thiếu giờ Open-Meteo/ERA5; cảnh báo không dừng khi độ phủ, % thiếu hoặc giá trị bất thường vượt ngưỡng đã chốt ngày 22/10), rồi đối chiếu số dòng DW với Silver; đã chạy cho cả 2016–2025 (ngày 23/10, có ERA5: khớp 1.490.237 dòng giờ và 17.866 ngày mưa). DAG `weather_incremental_dag` (task 25) chạy theo lịch hằng ngày: đọc mốc watermark (năm cuối đã nạp và đối chiếu xong), chọn năm mới tiếp theo kèm chạy lại 1 năm trước để lấy dữ liệu sửa muộn, gọi DAG trên, và chỉ dời mốc khi lần chạy đó thành công; không bao giờ vượt quá năm 2025. DAG này tạm dừng khi mới tạo, phải bật tay.
 - Địa giới 63 tỉnh trước sáp nhập (GeoJSON, geoBoundaries) trong Bronze kèm manifest; bản 25 tỉnh miền Bắc trong Silver, đã kiểm tra 8 điểm nằm đúng tỉnh (`scripts/ingest_boundaries.py`).
 - Bronze Open-Meteo lưu nguyên bytes nhận về kèm manifest (SHA-256, độ phủ, tọa độ lưới) cho cả 80 file; ERA5 (NetCDF, Copernicus CDS): chuỗi theo giờ tại ô lưới gần nhất của 8 điểm, đủ 2016–2025, lưu nguyên bản kèm manifest (`scripts/ingest_era5_timeseries.py`), đã chuyển sang Silver (task 15, 701.376 dòng) và so sánh với Open-Meteo; ERA5 đã nạp vào DW từ 23/10 (701.376 dòng), DW tổng 1.490.237 dòng.
 - Mưa ngày tại trạm từ NOAA GHCNh (5 trạm) → bảng riêng `fact_station_daily_rain`, kèm view so sánh với Open-Meteo.
@@ -24,9 +24,9 @@ Cập nhật ngày **2026-10-23**. Bằng chứng chi tiết (lệnh đã chạy
 - Ruff, pre-commit, Makefile, pytest và cấu hình GitHub Actions; tài liệu nghiệp vụ và đặc tả task tuần 2–5.
 - Đợt rà soát ngày 22/10 đã sửa: các script ML không còn ghi đè model, nhãn hay đặc trưng đã có; tải Open-Meteo và bước Silver báo lỗi (mã thoát 1) khi thiếu file; loader DW xóa dữ liệu theo phạm vi được yêu cầu, không theo dữ liệu đến; trạm 48820 được ghi đúng là sân bay Nội Bài (cách điểm HAN 22 km); migration `05_metadata_corrections.sql` thêm `pressure_type`, vai trò và khoảng cách trạm, cùng phiên bản nhãn dùng cho chỉ số test trong `dim_model`; DAX đếm ngày mưa/nóng trong hướng dẫn Power BI trả về 0 thay vì trống. Các việc cần nhóm quyết định nằm ở [business requirements §5a](docs/business-requirements.md#5a-proposals-awaiting-team-decision-2026-10-22).
 
-Dữ liệu thực 2016–2025 đã được dựng lại trên một máy cục bộ ngày 2026-10-21: DW có 788.861 dòng quan sát giờ (Open-Meteo 8 vị trí; Meteostat chỉ Hà Nội và không có mưa), 17.866 dòng mưa ngày GHCNh, 700.800 nhãn dùng được. Từ 23/10 DW có thêm ERA5 (8 vị trí, 701.376 dòng), tổng 1.490.237 dòng quan sát giờ. Lần kiểm tra gần nhất (23/10): `make test` 218 test đạt, `make test-integration` 22 test đạt.
+Dữ liệu thực 2016–2025 đã được dựng lại trên một máy cục bộ ngày 2026-10-21: DW có 788.861 dòng quan sát giờ (Open-Meteo 8 vị trí; Meteostat chỉ Hà Nội và không có mưa), 17.866 dòng mưa ngày GHCNh, 700.800 nhãn dùng được. Từ 23/10 DW có thêm ERA5 (8 vị trí, 701.376 dòng), tổng 1.490.237 dòng quan sát giờ. Lần kiểm tra gần nhất (23/10): `make test` 232 test đạt, `make test-integration` 22 test đạt.
 
-**Chưa hoàn chỉnh**: lưu payload gốc Bronze kèm manifest cho Meteostat (Open-Meteo đã xong ngày 22/10); DAG cập nhật tăng dần (task 25); dashboard Power BI và trang dự báo (task 33). Model v1 chọn ngưỡng theo F1 (0,40 là kết quả test chính thức); điểm ưu tiên Recall 0,36 chưa được nhóm N3 duyệt. Nhãn và đặc trưng dựa trên dữ liệu tái phân tích, chưa phải số đo trạm. Trạng thái nghiệm thu từng task do bảng phân công quản lý, không suy ra từ việc có file.
+**Chưa hoàn chỉnh**: lưu payload gốc Bronze kèm manifest cho Meteostat (Open-Meteo đã xong ngày 22/10); dashboard Power BI và trang dự báo (task 33). Model v1 chọn ngưỡng theo F1 (0,40 là kết quả test chính thức); điểm ưu tiên Recall 0,36 chưa được nhóm N3 duyệt. Nhãn và đặc trưng dựa trên dữ liệu tái phân tích, chưa phải số đo trạm. Trạng thái nghiệm thu từng task do bảng phân công quản lý, không suy ra từ việc có file.
 
 ## Tài liệu và phân công
 
@@ -173,6 +173,7 @@ Test_DL_weather/
 │   ├── weather_pipeline_health_dag.py
 │   ├── dag_ingest_open_meteo.py
 │   ├── dag_weather_pipeline.py    # Bronze → Silver → Gold → DW + đối chiếu (task 17)
+│   ├── dag_weather_incremental.py # Cập nhật tăng dần theo watermark (task 25)
 │   └── dag_rain_scoring.py        # Chấm điểm dự báo → Gold → DW + đối chiếu (task 32)
 ├── scripts/                       # Script và hướng dẫn ETL
 │   ├── init_minio.py, seed_dimensions.py, station_config.py
@@ -187,6 +188,7 @@ Test_DL_weather/
 │   ├── ingest_era5_timeseries.py  # ERA5 chuỗi theo điểm (CDS) → Bronze
 │   ├── transform_era5_to_silver.py, compare_era5_open_meteo.py  # ERA5 → Silver, so sánh với Open-Meteo
 │   ├── reconcile_dw.py            # Đối chiếu DW với Silver
+│   ├── pipeline_watermark.py      # Mốc watermark của DAG tăng dần (task 25)
 │   ├── analyze_cart_thresholds.py # So sánh ngưỡng, phân tích lỗi (task 36)
 │   ├── benchmark_dw_queries.py    # Đo thời gian truy vấn DW (task 26)
 │   ├── score_cart.py, publish_predictions.py  # Chấm điểm dự báo, đăng lên DW (task 32)
