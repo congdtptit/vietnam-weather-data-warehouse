@@ -6,11 +6,19 @@ import json
 import joblib
 import pandas as pd
 import pytest
+import train_cart as train_cart_module
 from build_rain_features import FEATURES, features_keys
 from evaluate_cart_test import evaluate_test, evaluation_keys
 from sklearn.dummy import DummyClassifier
 from test_train_cart import GRID, _client, _split
 from train_cart import classification_metrics, make_pipeline, model_keys, train_cart
+
+
+@pytest.fixture(autouse=True)
+def no_release_pins(monkeypatch):
+    """Synthetic models reuse the name v1; the pins of the real release are tested in
+    tests/test_model_release.py."""
+    monkeypatch.setattr(train_cart_module, "RELEASED_MODELS", {})
 
 
 def _trained_client():

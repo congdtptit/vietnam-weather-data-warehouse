@@ -208,6 +208,14 @@ Decisions below were made by the N1/N2 member doing N3's ML work. N3 confirms or
 
 ## Artifacts and acceptance
 
+**Release of CART v1 (2026-10-23, found necessary by the clean-machine rerun, ID 34).**
+
+- The pin: `scripts/train_cart.py` lists v1 in `RELEASED_MODELS` with its feature version (v1) and model SHA-256 (`1f667b91…`, as in `dim_model`). Training under a released version is refused for any other feature version and is written only when the bytes reproduce the pin. `evaluate_cart_test.py` refuses a model whose bytes are not the release.
+- Why it was needed: on an empty data lake, the defaults (features v2, version v1) would otherwise have stored a different model as v1, and test 2025 would have been reused for it.
+- The release bundle: the v1 labels and features cannot be rebuilt by today's code, because of the label fix. `scripts/model_release.py` exports and imports the release bundle: 12 objects, 28 MB, with SHA-256 checks.
+- Reproduction check: on a fresh stack, retraining on the imported v1 features reproduced the release byte for byte (see [reproduce from scratch](reproduce-from-scratch.md)).
+
+
 Save model/preprocessing, ordered features/units, model/label versions, source policy, training window, threshold, seed, and dependency versions. Predictions retain UTC origin, target window, location, probability, and class; design loading keys according to [warehouse schema](warehouse-schema.md).
 
 Report TP/FP/TN/FN with Rain as the positive class; Accuracy/Precision/Recall/F1, support, coverage, and threshold. Explain undefined metrics. Test labels at t, t+1h, t+24h, t+25h, gaps, and year boundaries; changing data after t must not change features at t.
