@@ -1370,3 +1370,11 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
 - Not changed:
   - IDs 9 (the GHCNh 300 mm rule waits for the team review), 21, 22, 23, 28, 29, 30, 36 (technically done, waiting for the N3 review checklist in `docs/rain-label.md`).
   - IDs 20, 27, 33, 35 (Power BI, the teammate's .pbix) and 37–40 (report).
+
+## Correction: ID 36 F1 tie rule — 2026-10-23
+
+- Found while reviewing the N3 checklist with the user: `scripts/analyze_cart_thresholds.py` described and implemented its F1 rule as "lowest threshold on a tie (as in the model's threshold rule)". The model's rule (`train_cart.choose_threshold`, documented in `docs/rain-label.md`) sends ties to the value closest to 0.5. The ID 36 entry above repeated the wrong description.
+- Effect on results: none. The corrected-label validation scan has a single maximum (F1 0.7887 at 0.40; next 0.7879 at 0.34).
+- Fix: the analysis now calls `train_cart.choose_threshold` itself, on the same grid (`GRID = THRESHOLDS`); its JSON states the rule. The test of the removed helper was replaced by a grid identity test. `make test` → 259 passed.
+- Rerun `analyze_cart_thresholds.py --overwrite`: F1 rule 0.40, Recall rule 0.36. Test at 0.40: P 0.7622 / R 0.7915 / F1 0.7766; at 0.36: 0.7228 / 0.8476 / 0.7802; at 0.50: 0.7948 / 0.7416 / 0.7673 (unchanged).
+- The release bundle `outputs/model_release_cart_v1/` was exported again, because it holds that JSON.

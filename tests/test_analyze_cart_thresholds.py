@@ -3,7 +3,8 @@
 import numpy as np
 import pandas as pd
 import pytest
-from analyze_cart_thresholds import GRID, errors, f1_rule, recall_rule, scan
+from analyze_cart_thresholds import GRID, errors, recall_rule, scan
+from train_cart import THRESHOLDS
 
 
 def _rows(values):
@@ -11,13 +12,10 @@ def _rows(values):
 
 
 def test_grid_is_the_model_threshold_rule_grid():
+    # The F1 rule is train_cart.choose_threshold itself (ties: closest to 0.5), on its grid
+    assert GRID == THRESHOLDS
     assert GRID[0] == 0.30 and GRID[-1] == 0.70 and len(GRID) == 21
     assert 0.36 in GRID and 0.40 in GRID
-
-
-def test_f1_rule_takes_the_lowest_threshold_on_a_tie():
-    rows = _rows([(0.38, 0.7, 0.9, 0.79), (0.40, 0.75, 0.8, 0.79), (0.42, 0.8, 0.7, 0.75)])
-    assert f1_rule(rows) == 0.38
 
 
 def test_recall_rule_is_the_highest_precision_reaching_the_target():
