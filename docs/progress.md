@@ -1362,7 +1362,7 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
 - Limits:
   - Same laptop and Docker as the original, not a second machine; the Airflow base image was not re-pulled.
   - The model was not retrained from today's labels: v1 comes from its release (see above).
-  - The clean stack (containers, volumes `weather_clean_*`, image `weather-airflow-clean`, clone in the session scratchpad) is still present until the user agrees to remove it.
+  - The clean stack (containers, volumes `weather_clean_*`, image `weather-airflow-clean`, clone in the session scratchpad) was kept until the user agreed to remove it. Removed on 2026-10-23 evening (`docker compose -p weather_clean down -v`, `docker image rm weather-airflow-clean:2.9.3-python3.10`, clone deleted): 6 containers, 2 volumes, 1 network, 1 image; Docker volumes went from 7.0 to 5.3 GB and images from 27.0 to 26.3 GB. The main stack was not touched (still running, `fact_weather_observation` 1,490,237 rows). The small comparison files from the run stay in the scratchpad.
 
 ## Workbook statuses after the final check of completed tasks — 2026-10-23
 
@@ -1387,3 +1387,17 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
 - The review found the ID 36 tie-rule inconsistency recorded above (fixed, no result changed).
 - Docs: `docs/rain-label.md` (decisions table and checklist, with the points to state in the report), `docs/business-requirements.md` §5a, data contract (unsupported extremes), `README.md`.
 - Workbook: IDs 9, 21, 22, 23, 28, 29, 30, 36 set to "Hoàn thành", 100; notes kept, with a dated line on the review; ID 7 note gets "23/10: N3 đã duyệt". The workbook now has 32 of 40 tasks complete. Open: 20, 27, 33, 35 (Power BI) and 37–40 (report).
+
+## Power BI guide: detailed page specification (IDs 20, 27, 33, 35) — 2026-10-23
+
+- Related work: workbook IDs 20, 27, 33, 35 (Power BI, handed to a team member). At the user's request, the handoff guide now says which charts to build on each page and describes every page in detail. The DW and the dump are unchanged.
+- Changes:
+  - `outputs/powerbi_handoff/huong_dan_power_bi.html` (not in Git; republished at the same link, version 4; `outputs/powerbi_handoff.zip` updated with it, dump SHA-256 still `7e900db1…`): a "what changed" box; step 6 rewritten with common settings (slicer style, single select, no dual-axis charts, fixed colours) and, per page, the question, a 16:9 layout sketch, a table of visuals with field wells and formatting, expected values, and the screenshots to take; step 4 adds three calculated columns and turning off Auto date/time; step 5 adds ten measures; step 7 adds nine reconciliation rows. No existing measure was changed.
+  - Design changes against the earlier guide: rain and temperature are no longer drawn in one chart (the old page 2 line chart would have needed two axes); page 2 forces one location because `Rain Hourly (mm)` sums locations, and drills year → month → day → hour on one axis; page 6 uses the Azure Maps visual, with the classic Map and a coordinate scatter as fallbacks (Microsoft lists the Bing-based Map visual for deprecation, no date set).
+  - `docs/powerbi-dashboard-v1.md` version 0.3: the eight pages, the two extra views, the calculated columns and new measures, and the full reconciliation table, so it matches the handoff guide.
+- Checks:
+  - Every expected value in the guide was computed by read-only SQL on the live DW (identical to the dump): for example Open-Meteo 2016–2025 mean per year HAN 2,202.4 mm (August 432.9, December 33.8), all 8 points 2,256.4 mm, 187.6 rainy and 19.2 hot days; HAN 2024 hourly profile (rain peaks at 13:00 with 171.4 mm, temperature at 14:00 with 27.93 °C); coverage (Open-Meteo and ERA5 100% except 2016 99.92%, Meteostat rain 0%, temperature 99.55–99.97%, record hours 701,320 / 701,320 / 87,478 for local 2016–2025); station versus model 2024 for the 5 stations and 355 compared days at HAN; forecast rates (actual 0.497, predicted 0.516, mean probability 0.481), F1 by month (0.517 in January to 0.903 in June) and by location (0.763–0.789).
+  - Colours checked with the dataviz palette validator on a white surface: the source set and the other pairs pass; Meteostat green and the dry-season yellow are below 3:1 contrast, so the guide asks for legends or data labels there.
+  - The HTML parses with every tag closed; rendered in headless Chrome at 900 px and inside a 375 px frame (tables scroll inside their boxes, no page overflow).
+- Limits: the new DAX and calculated columns were not run in Power BI Desktop (no Windows machine); their SQL equivalents were. The Azure Maps steps follow Microsoft's documentation and were not tried. If the team member already started from the earlier guide, nothing has to be redone; the additions are listed at the top of the guide.
+- Next step: the team member builds the eight pages and returns the `.pbix`, screenshots, and the filled reconciliation table (ID 35).
