@@ -35,7 +35,7 @@ Status as of 2026-10-22; [progress](progress.md) holds the commands, row counts,
 | Boundaries | 63-province (pre-merger) GeoJSON | `scripts/ingest_boundaries.py`: geoBoundaries VNM ADM1 (commit `9469f09`) in Bronze with a manifest; 25 northern provinces in Silver; research points checked (ID 4) |
 | Bronze/Silver/Gold | Contracted data layers | Script-based ETL for all three layers. Bronze keeps received bytes with manifests for Open-Meteo, GHCNh, ERA5, and boundaries; Meteostat Bronze is still the decompressed CSV without a manifest (ID 9). Silver verifies Open-Meteo manifest checksums |
 | DW | Dimensions, facts, loading, and OLAP | DDL, seeds, idempotent loaders, OLAP views (`sql/02_olap_views.sql`, `sql/03_station_daily_rain.sql`); DAG `weather_bronze_to_dw_dag` (ID 17) runs Open-Meteo, Meteostat, and GHCNh Bronze → Silver → (Gold) → DW for an explicit window of years, stops before any DW write when the Silver quality gate fails (`scripts/quality_gate.py`, ID 24), and reconciles both facts with Silver (`scripts/reconcile_dw.py`); verified on 2016–2025; manual trigger, no incremental schedule (ID 25) |
-| ML | CART, predictions in DW | RainNext24h labels, feature datasets v1 (used by model v1) and v2 (corrected labels, current), and CART model v1 (tuned on validation 2024, evaluated once on test 2025) in Gold ML, plus EDA and tree/rules notebooks; test 2025 predictions loaded into `fact_weather_prediction` with `dim_model` (`sql/04_predictions.sql`); no scoring DAG (ID 32) |
+| ML | CART, predictions in DW | RainNext24h labels, feature datasets v1 (used by model v1) and v2 (corrected labels, current), and CART model v1 (tuned on validation 2024, evaluated once on test 2025) in Gold ML, plus EDA and tree/rules notebooks; test 2025 predictions loaded into `fact_weather_prediction` with `dim_model` (`sql/04_predictions.sql`); scoring DAG `weather_rain_scoring_dag` (ID 32) recomputes features from Silver for a window of test origins, writes Gold predictions, and publishes them to the DW (unchanged rows untouched), then checks DW against Gold |
 | BI | Power BI dashboards | Build guide `docs/powerbi-dashboard-v1.md`; no PBIX file |
 
 ## Runtime and connections
@@ -44,7 +44,7 @@ Status as of 2026-10-22; [progress](progress.md) holds the commands, row counts,
 - Python dependencies are locked in `requirements.txt` and installed during builds with hashes and `pip check`; `_PIP_ADDITIONAL_REQUIREMENTS` has been removed. See [development](development.md) for setup/lock updates and [progress](progress.md) for actual build results.
 - Inside Docker: MinIO `minio:9000`, PostgreSQL `postgres:5432`. Host defaults: `localhost:9000` and `localhost:5434`; ports are configurable.
 - The PostgreSQL initializer uses the fixed database name `weather_dwh`. Supporting another name requires a separate change and verification.
-- `weather_system_healthcheck_dag` runs daily. `open_meteo_ingest_to_bronze_dag` is manual, not an incremental pipeline.
+- `weather_system_healthcheck_dag` runs daily. `open_meteo_ingest_to_bronze_dag` is manual, not an incremental pipeline. `weather_rain_scoring_dag` is manual, with an explicit window of test origin days.
 - Main Compose builds target `runtime`; target `test` adds pytest and fixtures. The independent `docker-compose.test.yml` stack uses PostgreSQL/MinIO on tmpfs, an internal network, and no development-data mounts. CI uses the same Makefile as local checks.
 
 ## Documents and ownership

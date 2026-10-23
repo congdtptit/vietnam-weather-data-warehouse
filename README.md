@@ -8,7 +8,7 @@ README này dùng tiếng Việt theo yêu cầu của dự án. Code và tài l
 
 ## Trạng thái hiện tại
 
-Cập nhật ngày **2026-10-22**. Bằng chứng chi tiết (lệnh đã chạy, số dòng, thời gian chạy, hạn chế) nằm trong [nhật ký tiến độ](docs/progress.md). Đã có:
+Cập nhật ngày **2026-10-23**. Bằng chứng chi tiết (lệnh đã chạy, số dòng, thời gian chạy, hạn chế) nằm trong [nhật ký tiến độ](docs/progress.md). Đã có:
 
 - Docker Compose cho MinIO, PostgreSQL và Airflow (đã kiểm chứng webserver, scheduler và một lần chạy DAG kiểm tra ngày 22/10); Dockerfile Airflow 2.9.3/Python 3.10 với dependency được khóa phiên bản và checksum.
 - Khởi tạo bucket Bronze/Silver/Gold, DDL Star Schema và seed dimension; danh mục trạm đã xác minh trong `scripts/station_config.py`.
@@ -18,12 +18,15 @@ Cập nhật ngày **2026-10-22**. Bằng chứng chi tiết (lệnh đã chạy
 - Mưa ngày tại trạm từ NOAA GHCNh (5 trạm) → bảng riêng `fact_station_daily_rain`, kèm view so sánh với Open-Meteo.
 - View OLAP giờ/ngày/tháng/năm và độ phủ (`sql/02_olap_views.sql`); hướng dẫn dựng Power BI v1 (`docs/powerbi-dashboard-v1.md`). File PBIX chưa có.
 - Nhãn RainNext24h (ngưỡng 1 mm, chia train/validation/test theo năm UTC, purge biên) xuất ra Gold ML; notebook EDA `notebooks/eda_rain_next24h.ipynb` với môi trường riêng (`make notebook-setup`); bộ 22 đặc trưng không rò rỉ dữ liệu tương lai trong `gold/ml_features/` (3 file theo tập train/validation/test); mô hình CART v1 đã train, chọn tham số trên validation 2024 và đánh giá một lần trên test 2025 (F1 0,777, Recall 0,792 với nhãn đã sửa lỗi làm tròn ngày 22/10; mốc dự báo theo hiện trạng F1 0,729); hình cây và luật trong `notebooks/cart_tree_rules.ipynb`; dự đoán test 2025 đã nạp vào `fact_weather_prediction` cùng `dim_model` và view `vw_prediction_vs_actual`.
+- So sánh ngưỡng và phân tích lỗi mô hình (task 36, `scripts/analyze_cart_thresholds.py`): ngưỡng chính thức 0,40 giữ nguyên; điểm ưu tiên Recall 0,36 chọn trên validation, số liệu trên test chỉ là phân tích làm sau.
+- DAG chấm điểm dự báo `weather_rain_scoring_dag` (task 32): tính lại đặc trưng từ Silver cho một khoảng ngày của tập test 2025, chấm điểm bằng CART v1 đã đóng băng (kiểm tra SHA-256 với `dim_model`), ghi dự báo vào Gold rồi vào DW (dòng không đổi thì không ghi lại), sau đó đối chiếu DW với Gold. Chạy thật cả năm 2025 ngày 23/10: 69.888 dự báo, DW không thay đổi.
+- Hiệu năng truy vấn DW (task 26, `scripts/benchmark_dw_queries.py`): mỗi view tối đa 1,3 giây, truy vấn đối chiếu tối đa 1,2 giây; đạt mục tiêu đã chốt (dưới 5 giây và dưới 2 giây), không cần thêm index.
 - Ruff, pre-commit, Makefile, pytest và cấu hình GitHub Actions; tài liệu nghiệp vụ và đặc tả task tuần 2–5.
 - Đợt rà soát ngày 22/10 đã sửa: các script ML không còn ghi đè model, nhãn hay đặc trưng đã có; tải Open-Meteo và bước Silver báo lỗi (mã thoát 1) khi thiếu file; loader DW xóa dữ liệu theo phạm vi được yêu cầu, không theo dữ liệu đến; trạm 48820 được ghi đúng là sân bay Nội Bài (cách điểm HAN 22 km); migration `05_metadata_corrections.sql` thêm `pressure_type`, vai trò và khoảng cách trạm, cùng phiên bản nhãn dùng cho chỉ số test trong `dim_model`; DAX đếm ngày mưa/nóng trong hướng dẫn Power BI trả về 0 thay vì trống. Các việc cần nhóm quyết định nằm ở [business requirements §5a](docs/business-requirements.md#5a-proposals-awaiting-team-decision-2026-10-22).
 
-Dữ liệu thực 2016–2025 đã được dựng lại trên một máy cục bộ ngày 2026-10-21: DW có 788.861 dòng quan sát giờ (Open-Meteo 8 vị trí; Meteostat chỉ Hà Nội và không có mưa), 17.866 dòng mưa ngày GHCNh, 700.800 nhãn dùng được. Từ 23/10 DW có thêm ERA5 (8 vị trí, 701.376 dòng), tổng 1.490.237 dòng quan sát giờ. Lần kiểm tra gần nhất (23/10): `make test` 184 test đạt, `make test-integration` 19 test đạt.
+Dữ liệu thực 2016–2025 đã được dựng lại trên một máy cục bộ ngày 2026-10-21: DW có 788.861 dòng quan sát giờ (Open-Meteo 8 vị trí; Meteostat chỉ Hà Nội và không có mưa), 17.866 dòng mưa ngày GHCNh, 700.800 nhãn dùng được. Từ 23/10 DW có thêm ERA5 (8 vị trí, 701.376 dòng), tổng 1.490.237 dòng quan sát giờ. Lần kiểm tra gần nhất (23/10): `make test` 218 test đạt, `make test-integration` 22 test đạt.
 
-**Chưa hoàn chỉnh**: lưu payload gốc Bronze kèm manifest cho Meteostat (Open-Meteo đã xong ngày 22/10); DAG cập nhật tăng dần (task 25); DAG chấm điểm dự báo (task 32); dashboard Power BI và trang dự báo (task 33). Model v1 chọn ngưỡng theo F1; điểm vận hành ưu tiên Recall (ngưỡng 0,36) đã chốt nhưng chưa tính trên test (task 36). Nhãn và đặc trưng dựa trên dữ liệu tái phân tích, chưa phải số đo trạm. Trạng thái nghiệm thu từng task do bảng phân công quản lý, không suy ra từ việc có file.
+**Chưa hoàn chỉnh**: lưu payload gốc Bronze kèm manifest cho Meteostat (Open-Meteo đã xong ngày 22/10); DAG cập nhật tăng dần (task 25); dashboard Power BI và trang dự báo (task 33). Model v1 chọn ngưỡng theo F1 (0,40 là kết quả test chính thức); điểm ưu tiên Recall 0,36 chưa được nhóm N3 duyệt. Nhãn và đặc trưng dựa trên dữ liệu tái phân tích, chưa phải số đo trạm. Trạng thái nghiệm thu từng task do bảng phân công quản lý, không suy ra từ việc có file.
 
 ## Tài liệu và phân công
 
@@ -169,7 +172,8 @@ Test_DL_weather/
 ├── dags/                          # DAG và hướng dẫn Airflow
 │   ├── weather_pipeline_health_dag.py
 │   ├── dag_ingest_open_meteo.py
-│   └── dag_weather_pipeline.py    # Bronze → Silver → Gold → DW + đối chiếu (task 17)
+│   ├── dag_weather_pipeline.py    # Bronze → Silver → Gold → DW + đối chiếu (task 17)
+│   └── dag_rain_scoring.py        # Chấm điểm dự báo → Gold → DW + đối chiếu (task 32)
 ├── scripts/                       # Script và hướng dẫn ETL
 │   ├── init_minio.py, seed_dimensions.py, station_config.py
 │   ├── ingest_open_meteo.py, ingest_meteostat.py, ingest_ghcnh.py
@@ -183,7 +187,10 @@ Test_DL_weather/
 │   ├── ingest_era5_timeseries.py  # ERA5 chuỗi theo điểm (CDS) → Bronze
 │   ├── transform_era5_to_silver.py, compare_era5_open_meteo.py  # ERA5 → Silver, so sánh với Open-Meteo
 │   ├── reconcile_dw.py            # Đối chiếu DW với Silver
-│   └── load_predictions.py        # Dự đoán → DW
+│   ├── analyze_cart_thresholds.py # So sánh ngưỡng, phân tích lỗi (task 36)
+│   ├── benchmark_dw_queries.py    # Đo thời gian truy vấn DW (task 26)
+│   ├── score_cart.py, publish_predictions.py  # Chấm điểm dự báo, đăng lên DW (task 32)
+│   └── load_predictions.py        # Đăng ký model và dự đoán test vào DW (task 31)
 ├── sql/                           # Khởi tạo DW và hướng dẫn SQL
 │   ├── 01_init_postgres.sh
 │   ├── init_dwh_schema.sql
