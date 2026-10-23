@@ -1307,3 +1307,59 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
 - Checks: `ruff`; `make test` → 254 passed; `make test-integration` → 22 passed.
 - Real run `build_ml_pivot.py --start-year 2016 --end-year 2025` (15 s): 701,376 rows (70,080 or 70,272 per year = 8 locations × the hours of the year). Open-Meteo and ERA5 701,376 each; Meteostat 87,485 (HAN only). Every per-source, per-variable, and per-year check against Gold and the DW passed. Manifest `gold/ml_pivot/weather_hourly_by_source_v1.json`. DW fingerprint unchanged.
 - Limits: GHCNh daily station rain has a daily grain and is not in this hourly pivot. No model uses the pivot yet; a multi-source model would need its own feature and leakage review (`docs/rain-label.md`).
+
+## Clean-machine end-to-end rerun (ID 34) — 2026-10-23
+
+- Related work: workbook ID 34 ("Chạy lại toàn bộ pipeline trên máy sạch, sửa lỗi", output "Pipeline chạy từ đầu đến cuối"). Roadmap evidence: reproduction commands, runtime versions, scope and run ids, key/row/object counts, logs, reruns, failure checks.
+- Method: proposed by the assistant and approved by the user on 2026-10-23 (option A). `AGENTS.md` forbids resetting the volumes of the stack that holds the Power BI data, so the "clean machine" was a second Compose project on the same Mac.
+  - A fresh `git clone` of `feat/gold-ml-pivot` at `18ae289`, with no local changes; `.env` copied (CDS key) with other host ports (8090, 9010, 9011, 5444).
+  - Project `weather_clean` with a local override (renamed containers and image), empty volumes `weather_clean_postgres_data` and `weather_clean_minio_data`, and an image built with `--no-cache` (59 s; the Airflow base image came from the local cache).
+  - The original stack kept running and was not changed.
+- Runtime: Docker 28.4.0 (linux/amd64), Compose 2.39.4, macOS 13.7.8 x86_64; Airflow 2.9.3, Python 3.10.14, PostgreSQL 16.15, MinIO RELEASE.2026-09-22; pandas 2.1.4, scikit-learn 1.5.1, geopandas 0.14.4, xarray 2024.3.0, netCDF4 1.7.1.
+- Run, in order (all on the clean stack, real downloads):
+  1. Initialization: 3 empty buckets; schema plus migrations 02–05; `dim_location` 8, `dim_source` 5, `dim_time` 24; Airflow 5 DAGs, 0 import errors; `weather_incremental_dag` paused at creation. The PostgreSQL log shows `relation ... does not exist` errors from Airflow's first start on its own metadata database; they are not in `weather_dwh`.
+  2. `ingest_boundaries.py`: 17 s, written to the clean MinIO (`minio:9000` on the clean network, checked by listing).
+  3. `weather_bronze_to_dw_dag` `manual__2026-10-23T13:07:42` (2016–2025, all locations): 14/14 tasks on the first try, 13:07:43–13:22:51 (15 min 8 s).
+     - Downloads: Open-Meteo 80 (349 s), Meteostat 15 stored + 25 HTTP 404 recorded (37 s), ERA5 8 series from CDS (53 s), GHCNh 50 (231 s).
+     - Quality gate: 1,032 checks, 0 failed, 0 warnings.
+     - Gold load: 454 s, 0 failures.
+     - Reconcile: 170 groups, 1,490,237 = 1,490,237 hourly rows and 17,866 = 17,866 station-days.
+  4. `export_rain_labels.py` (17 s) and `build_rain_features.py` (21 s), v2.
+  5. The 12 released CART v1 objects (labels and features v1, model, report, evaluations, predictions) were copied from the original Gold with SHA-256 checks. Retraining on features v1 as `v1repro` (238 s, train/validation only) gave a model byte-identical to v1 (`1f667b91…`): same parameters, threshold, validation metrics, and probabilities on 70,080 validation rows.
+  6. `load_predictions.py --version v1`: 69,888 rows. `weather_rain_scoring_dag` 2025-01-01..2025-12-30: 4/4 tasks; features recomputed from the clean Silver; 0 inserted, 0 updated, 69,888 unchanged; check passed.
+  7. `build_ml_pivot.py`: 701,376 rows, checks passed. `assign_stations_geo.py`: passed.
+  8. Rerun `weather_bronze_to_dw_dag` 2024 × HAN: success; nothing downloaded; reconcile 26,335 = 26,335; DW unchanged.
+  9. Failure check, window 2025→2024: `validate_window` failed (`ValueError: window 2025-2024 is outside 2016-2025 or reversed`) and the downstream tasks were `upstream_failed`.
+- Comparison with the original machine:
+  - DW, by natural keys: 10 of 11 items had identical md5 at once — the three facts, all dimensions, `dim_model`, and the prediction view outcomes.
+    - `vw_obs_daily` differed, but also between two runs on the original DW alone. It sums wind-direction sines and cosines in double precision. Rounded to 6 decimals it is identical on both machines and stable.
+  - Data lake: 2,964 objects (original) against 2,947 (clean).
+    - Only on the original: the 13/10 demo objects and the 4 stopped gridded ERA5 months. Only on the clean side: the `v1repro` check model.
+    - Byte-identical:
+      - Silver: every object (1,080 hourly, 960 ERA5, 50 daily rain, quarantine).
+      - Gold: 120 observation months, 364 prediction days, the pivot, labels and features v2 (Parquet), the model v1 objects.
+      - Bronze: ERA5, GHCNh, Meteostat payloads and the boundaries.
+    - Differences, all explained:
+      - Open-Meteo Bronze payloads differ only in `generationtime_ms`, so their SHA-256 and sometimes their size differ.
+      - Manifests and reports differ only in `retrieved_at_utc`/`generated_at_utc`/`updated_at` and the CDS request id.
+      - The ERA5 manifests write the same first and last time in another string format (written by the code before the 2026-10-23 review fix).
+      - Gold `dim_station` differs only in `station_key` of 48823: 23 on the original, where earlier seed runs consumed sequence values, and 12 on the clean stack. The content by `station_id` is the same.
+- Defect found and fixed (branch `fix/clean-machine-release`, commit `6e87190`):
+  - On an empty data lake, `train_cart.py` with its defaults (features v2, version v1) would store a different model as v1, and `evaluate_cart_test.py` would then use test 2025 again.
+  - Model v1's labels and features (v0.2, before the label fix) cannot be rebuilt by today's code, so another machine needs them from a release.
+  - Changes:
+    - `RELEASED_MODELS` pin in `scripts/train_cart.py` (v1: features v1, SHA-256 `1f667b91…`). Training a released version refuses other features and writes only reproducing bytes; reports now record `model_sha256` and `reproduces_released_version`.
+    - `scripts/evaluate_cart_test.py` refuses a model that is not the release.
+    - New `scripts/model_release.py` export/import bundle: 12 objects, SHA-256 per file and pin; import never overwrites other bytes.
+    - Tests: new `tests/test_model_release.py` (6). The synthetic training and evaluation tests lift the pins with a fixture, because they reuse the name v1.
+  - Checked on the clean stack after removing the v1 objects:
+    - the default `train_cart.py` is refused ("model v1 is released and was trained on features v1 ...");
+    - `model_release.py import` uploads 12, and a second import skips 12 identical;
+    - `evaluate_cart_test.py` refuses (already evaluated once).
+  - Bundle exported to `outputs/model_release_cart_v1/` (28 MB, not in Git).
+- Docs: new `docs/reproduce-from-scratch.md` (the commands above, expected results, expected differences); `docs/rain-label.md` (release and pin), `docs/architecture.md` (reproduction row), `README.md`.
+- Checks: `ruff`; `make test` → 260 passed (a first run had 2 failures in the new release tests: the bundle script imported the pins at load time, so the test patch did not reach it; it now reads them at call time); `make test-integration` → 22 passed.
+- Limits:
+  - Same laptop and Docker as the original, not a second machine; the Airflow base image was not re-pulled.
+  - The model was not retrained from today's labels: v1 comes from its release (see above).
+  - The clean stack (containers, volumes `weather_clean_*`, image `weather-airflow-clean`, clone in the session scratchpad) is still present until the user agrees to remove it.
