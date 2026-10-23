@@ -1245,3 +1245,26 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
   - Offline check: the DAG's 13 commands for 2024 × HAN (4 ingestions, 4 transforms, gate, seed, Gold load, daily rain, reconcile) ran in a container on an internal Docker network with only MinIO and PostgreSQL attached. An HTTPS request from it failed (no internet), and every command exited 0: ingestions skipped by manifest, gate passed, reconcile passed. The temporary network was removed afterwards.
   - DW fingerprint (observations, daily rain, predictions, `dim_model`) identical before and after.
 - Limits: the Bronze skip checks the object size against the manifest (as GHCNh does); the SHA-256 is checked when Silver reads the object. The offline check covered one year and one location; other stored years take the same skip paths.
+
+## Station assignment with GeoPandas (ID 11) — 2026-10-23
+
+- Related work: workbook ID 11 (DimLocation, DimStation, "gán trạm theo khoảng cách bằng GeoPandas"; 60% because distances were haversine, not GeoPandas). Decided mappings are in the data contract (station selection, GHCNh stations). Read-only work: the DW data behind the Power BI package had to stay unchanged.
+- Changes:
+  - New `scripts/assign_stations_geo.py`:
+    - Projects the 8 research points and the 11 stations with coordinates to UTM 48N (EPSG:32648) and builds the distance matrix.
+    - Assigns each point its nearest station within `--max-km` (default 30; a check parameter, not a decision) with `sjoin_nearest`.
+    - Requires the GHCNh mapping to equal that result. Meteostat differences are reported with the nearer station's registry status.
+    - Requires every stored `distance_km` to match within 0.1 km + 0.6% (rounding plus the sphere versus ellipsoid difference).
+    - Joins points and stations to the Silver province polygons (ID 4): each point must be in its `dim_location` province; a station outside its point's province is reported.
+    - Requires `dim_station` to equal the registry.
+    - Writes `gold/quality_reports/station_assignment_geo_<ts>.json`; exit 1 on a failed check.
+  - Tests: new `tests/test_assign_stations_geo.py` (7: projected distance against the pyproj WGS84 geodesic, nearest within the radius, province join, spherical stored distance accepted and a wrong one rejected, GHCNh mapping must be the nearest, `dim_station` comparison).
+  - Docs: `docs/warehouse-schema.md` (stations row), `docs/business-requirements.md` §6, `docs/NAMING_CONVENTIONS.md`, `README.md`.
+- Checks: `ruff`; `make test` → 247 passed. The first run failed one new test: it expected 0.01 km agreement with the geodesic for a 254 km pair as well, while the UTM scale error there is 0.04%. The test now applies 0.01 km to the mapped pairs and 0.1% to the long pair, and the docstring states the same.
+- Real run (`gold/quality_reports/station_assignment_geo_20261023T120948Z.json`, 10 s): passed.
+  - GHCNh mapping equals the nearest station within 30 km for all 8 points: HAN 48825 11.38 km, HPH 48826 7.57, LCA 48803 1.64, TNG 48831 1.70, NBI 48823 27.26; PTO, TUQ, HBI none (their nearest stations are 63.2 km, 68.5 km, and 47.6 km away).
+  - Meteostat: HPH, LCA, TNG are the nearest station. For HAN, 48825 Hà Đông (11.38 km, `UNMAPPED_MISASSIGNED`, Meteostat use pending) is nearer than the mapped 48820 (21.86 km). NBI's nearest, 48823, is GHCNh-only.
+  - Stored distances against GeoPandas: 48820 22.0 vs 21.86 (spherical 21.96, WGS84 geodesic 21.87), 48825 11.3 vs 11.38, others within 0.05 km.
+  - Provinces: 8 of 8 points in their `dim_location` province. Station 48823 is in Nam Định (role `substitute_neighbouring_province`, as decided). The 48820 coordinate (21.221, 105.807; Nội Bài airport per ISD) falls 2.5 km inside Vĩnh Phúc on the geoBoundaries polygon; not resolved (no second boundary source was checked). 48840 Thanh Hóa is outside the 25-province northern subset.
+  - `dim_station` equals the registry. DW fingerprint unchanged.
+- Limits: the stored distances stay spherical; replacing them with the GeoPandas values would change `dim_station.distance_km` for 48820 (22.0 → 21.9) and the GHCNh value for 48825 (11.3 → 11.4), so it is not done while the Power BI data is frozen. The registry, not this script, still feeds the loaders.

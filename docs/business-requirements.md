@@ -119,7 +119,7 @@ These came from the 2026-10-22 audit. On 2026-10-22 the N1/N2 member doing N3's 
 | PDF §12 asks to emphasize Recall; CART v1 maximizes F1 | Disclosed in [rain-label.md](rain-label.md); a predeclared Recall rule is proposed for ID 36 (§5a) |
 | PDF §5 lists NetCDF and GeoJSON | Open-Meteo JSON, Meteostat CSV, GHCNh PSV, and boundary GeoJSON (ID 4, 2026-10-22) are implemented; ERA5 NetCDF is implemented (point time series 2016–2025, Bronze → Silver → DW, 2026-10-23; §5a) |
 | Meteostat 48820 "Ha Noi" is mapped to HAN, but its hourly values come from Nội Bài airport (ISD 488200, METAR VVNB), about 22 km from the HAN point | Recorded as `nearest_available` with the airport coordinates since 2026-10-22; station-versus-grid comparisons for HAN compare the airport with the HAN grid point |
-| ID 11 asks for GeoPandas distance assignment | Distances are computed once (haversine) and stored in `scripts/station_config.py`; values were recomputed in the 2026-10-22 audit (HAN 22.0 km for Meteostat, 11.3 km for GHCNh Hà Đông) |
+| ID 11 asks for GeoPandas distance assignment | The stored distances in `scripts/station_config.py` are spherical (haversine) values rounded to 0.1 km (recomputed in the 2026-10-22 audit). Since 2026-10-23, `scripts/assign_stations_geo.py` computes distances and the nearest station with GeoPandas (UTM 48N, `sjoin_nearest`). It checks them against the registry and `dim_station` and reports, without changing the DW. The GHCNh mapping equals the nearest station within 30 km for all 8 points. Meteostat HAN keeps 48820 (21.9 km) although 48825 Hà Đông is nearer (11.4 km), because 48825 is not decided for Meteostat. The largest stored difference is 22.0 vs 21.86 km (sphere versus ellipsoid) |
 
 ## 7. Handover criteria
 
