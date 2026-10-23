@@ -68,8 +68,11 @@ MIN_RAIN_DAY_COVERAGE_PCT = 90.0  # GHCNh, lowest station-year 95.89%
 MAX_MISSING_PCT = {  # % of expected hours; variables not listed are reported only
     "Open-Meteo": dict.fromkeys(MEASUREMENTS, 0.0),  # never missing; feeds the ML labels
     "Meteostat": {"temperature_c": 5.0, "humidity_percent": 5.0},  # worst year 0.45%
-    # ERA5 (added 2026-10-23): never missing; radiation is not requested, so not limited.
-    "ERA5": {c: 0.0 for c in MEASUREMENTS if c != "solar_radiation_wm2"},
+    # ERA5 (added 2026-10-23): never missing; radiation is not requested and direction is null
+    # in calm hours by contract, so neither is limited.
+    "ERA5": {
+        c: 0.0 for c in MEASUREMENTS if c not in ("solar_radiation_wm2", "wind_direction_deg")
+    },
 }
 PLAUSIBLE = {  # variable: (low, high); observed temperature 3.8-42.9, pressure 963.3-1041.0
     "temperature_c": (0.0, 45.0),

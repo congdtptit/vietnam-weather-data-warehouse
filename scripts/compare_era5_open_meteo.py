@@ -67,7 +67,8 @@ def metrics(a: pd.Series, b: pd.Series) -> dict[str, Any]:
         "bias": round(float(d.mean()), 3),
         "mae": round(float(d.abs().mean()), 3),
         "rmse": round(float(np.sqrt((d**2).mean())), 3),
-        "corr": round(float(a.corr(b)), 3),
+        # undefined (not 0) when either side is constant
+        "corr": round(float(a.corr(b)), 3) if a.std() > 0 and b.std() > 0 else None,
     }
 
 
@@ -126,14 +127,18 @@ def compare(start_year: int, end_year: int, client: Minio | None = None) -> dict
         if not groups:
             print(f"  {loc}: no pairs")
             continue
-        temp = [g["variables"]["temperature_c"] for g in groups]
-        pres = [g["variables"]["pressure_hpa"] for g in groups]
+
+        def mean_of(variable: str, stat: str) -> float:
+            values = [g["variables"][variable].get(stat) for g in groups]
+            values = [v for v in values if v is not None]  # groups with < 2 pairs have none
+            return float(np.mean(values)) if values else float("nan")
+
         e = sum(g["rain_total_mm"]["era5"] for g in groups) / len(groups)
         o = sum(g["rain_total_mm"]["open_meteo"] for g in groups) / len(groups)
         print(
             f"  {loc}: pairs {sum(g['pairs'] for g in groups)}, temperature bias "
-            f"{np.mean([t['bias'] for t in temp]):+.2f} C corr {np.mean([t['corr'] for t in temp]):.3f}, "
-            f"pressure bias {np.mean([p['bias'] for p in pres]):+.1f} hPa, "
+            f"{mean_of('temperature_c', 'bias'):+.2f} C corr {mean_of('temperature_c', 'corr'):.3f}, "
+            f"pressure bias {mean_of('pressure_hpa', 'bias'):+.1f} hPa, "
             f"rain per year ERA5 {e:.0f} mm / Open-Meteo {o:.0f} mm"
         )
     print(json.dumps({"report_key": report["report_key"], "groups": len(rows)}))

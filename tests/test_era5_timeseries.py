@@ -33,9 +33,17 @@ def _client():
         if (bucket, key) not in store:
             raise S3Error("NoSuchKey", "missing", "/r", "req", "host", None)
 
+    def listing(bucket, prefix="", recursive=False):
+        return [
+            SimpleNamespace(object_name=k)
+            for b, k in sorted(store)
+            if b == bucket and k.startswith(prefix)
+        ]
+
     client.get_object.side_effect = get
     client.put_object.side_effect = put
     client.stat_object.side_effect = stat
+    client.list_objects.side_effect = listing
     return client, store
 
 
@@ -47,8 +55,8 @@ VALUES = {  # hour index -> (t2m K, d2m K, tp m, sp Pa, u10, v10, tcc)
 
 
 class FakeCds:
-    def __init__(self, hours=None, grid=(21.0, 105.75)):
-        self.calls, self.hours, self.grid = [], hours, grid
+    def __init__(self, hours=None, grid=(21.0, 105.75), swap_hour=False):
+        self.calls, self.hours, self.grid, self.swap_hour = [], hours, grid, swap_hour
 
     def retrieve(self, dataset, request):
         self.calls.append((dataset, request))
@@ -58,6 +66,8 @@ class FakeCds:
     def _download(self, request, target):
         first, last = request["date"][0].split("/")
         times = pd.date_range(first, f"{last} 23:00", freq="h")[: self.hours]
+        if self.swap_hour:  # same count, but one requested hour replaced by one outside
+            times = times.delete(100).append(pd.DatetimeIndex([times[-1] + pd.Timedelta(hours=1)]))
         n = len(times)
         data = {
             k: np.full(n, v, "float32")
@@ -205,3 +215,89 @@ def test_rerun_over_current_objects_needs_no_credentials(monkeypatch):
         "stored": 0,
         "skipped": 1,
     }
+
+
+def test_hours_must_be_the_requested_ones_not_just_their_number():
+    client, store = _client()
+    with pytest.raises(RuntimeError, match="1 failure"):
+        ts.ingest_era5_timeseries(
+            2024, 2024, location="HAN", cds_client=FakeCds(swap_hour=True), client=client
+        )
+    assert store == {}
+
+
+def test_a_stored_wider_window_serves_a_narrower_run_without_cds():
+    client, store = _client()
+    ts.ingest_era5_timeseries(2023, 2024, location="HAN", cds_client=FakeCds(), client=client)
+    no_cds = Mock()
+    no_cds.retrieve.side_effect = AssertionError("must not request")
+    assert ts.ingest_era5_timeseries(
+        2024, 2024, location="HAN", cds_client=no_cds, client=client
+    ) == {
+        "stored": 0,
+        "skipped": 1,
+    }
+    report = silver.transform_era5(2024, 2024, location="HAN", client=client)
+    (loc,) = report["locations"]
+    assert loc["bronze_object"].endswith("era5_timeseries_HAN_20230101_20241231.zip")
+    assert loc["written"] == 12 and loc["rows"] == 8760 + 8784
+    assert ("silver", silver.silver_key("HAN", 2023, 1)) not in store  # outside the run window
+
+
+def test_a_stored_series_for_other_coordinates_is_not_current():
+    client, store = _client()
+    cds = FakeCds()
+    ts.ingest_era5_timeseries(2024, 2024, location="HAN", cds_client=cds, client=client)
+    _, manifest_key = ts.bronze_keys("HAN", 2024, 2024)
+    manifest = json.loads(store[("bronze", manifest_key)])
+    manifest["request"]["location"]["latitude"] = 21.5
+    store[("bronze", manifest_key)] = json.dumps(manifest).encode()
+    ts.ingest_era5_timeseries(2024, 2024, location="HAN", cds_client=cds, client=client)
+    assert len(cds.calls) == 2
+
+
+def test_silver_checks_every_year_before_writing_any():
+    client, store = _client()
+    ts.ingest_era5_timeseries(2023, 2024, location="HAN", cds_client=FakeCds(), client=client)
+    real = silver.compute_hourly_coverage
+
+    def gap_in_2024(df, start, end, cols):
+        cov = real(df, start, end, cols)
+        return {**cov, "missing_hours": 1} if start.year == 2024 else cov
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(silver, "compute_hourly_coverage", gap_in_2024)
+        with pytest.raises(RuntimeError, match="1 failure"):
+            silver.transform_era5(2023, 2024, location="HAN", client=client)
+    assert not any(k[0] == "silver" and k[1].startswith("era5/") for k in store)  # 2023 untouched
+
+
+@pytest.mark.parametrize("u, v", [(0.0001, -1.0), (-0.00001, -2.0)])
+def test_north_is_zero_never_360(u, v):
+    _, direction = silver.wind_from_uv(pd.Series([u]), pd.Series([v]))
+    assert direction.iloc[0] == 0.0
+
+
+def test_direction_is_null_when_the_stored_speed_is_calm():
+    speed, direction = silver.wind_from_uv(pd.Series([0.003]), pd.Series([0.002]))
+    assert speed.iloc[0] == 0.0 and np.isnan(direction.iloc[0])
+
+
+def test_comparison_summary_survives_a_variable_without_pairs():
+    import compare_era5_open_meteo as cmp
+
+    client, store = _client()
+    times = pd.date_range("2024-01-01", periods=48, freq="h", tz="UTC")
+    for name, key in (
+        ("era5", silver.silver_key("HAN", 2024, 1)),
+        ("om", "weather_hourly/year=2024/month=01/weather_hourly_HAN_202401.parquet"),
+    ):
+        df = pd.DataFrame({"timestamp_utc": times, **{v: 1.0 for v in cmp.VARIABLES}})
+        df["temperature_c"] = np.nan if name == "era5" else 20.0
+        df["grid_latitude"], df["grid_longitude"] = 21.0, 105.75
+        buf = io.BytesIO()
+        df.to_parquet(buf)
+        store[("silver", key)] = buf.getvalue()
+    report = cmp.compare(2024, 2024, client=client)
+    (han,) = [g for g in report["groups"] if g["location"] == "HAN"]
+    assert han["pairs"] == 48 and han["variables"]["temperature_c"] == {"pairs": 0}

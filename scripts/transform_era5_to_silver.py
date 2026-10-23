@@ -13,8 +13,11 @@ Conversions, per ERA5 single-level conventions (checked against the stored files
 - sp Pa -> pressure_hpa (surface pressure, pressure_type `surface`);
 - tp m -> precipitation_mm. ERA5 hourly tp is the total over the hour ending at valid_time,
   the same convention as Open-Meteo, so no de-accumulation is needed (unlike ERA5-Land);
-- u10, v10 -> wind_speed_ms and the meteorological direction the wind blows from;
+- u10, v10 -> wind_speed_ms and the meteorological direction the wind blows from, in
+  [0, 360) after rounding; null when the stored speed is 0.00 (calm);
 - tcc (0-1) -> cloud_cover_percent.
+The Bronze object is any current series covering the window (scripts/ingest_era5_timeseries.py,
+`find_current`); every requested year is checked before any Silver object is written.
 The value of the nearest grid cell is kept as `grid_latitude`, `grid_longitude`.
 
 Silver keys (bucket silver), outside `weather_hourly/` (Open-Meteo and Meteostat); the Gold loader
@@ -38,7 +41,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from ingest_era5_timeseries import bronze_keys
+from ingest_era5_timeseries import find_current
 from ingest_ghcnh import BUCKET_BRONZE, get_minio_client, is_s3_not_found_error
 from ingest_open_meteo import NORTH_LOCATIONS
 from minio import Minio
@@ -93,9 +96,10 @@ def relative_humidity(t_c: pd.Series, td_c: pd.Series) -> pd.Series:
 
 
 def wind_from_uv(u: pd.Series, v: pd.Series) -> tuple[pd.Series, pd.Series]:
-    """Speed (m/s) and the direction the wind blows from (degrees, 0 = north, 90 = east)."""
-    speed = np.hypot(u, v)
-    direction = (np.degrees(np.arctan2(-u, -v)) + 360.0) % 360.0
+    """Speed (m/s, 2 decimals) and the direction the wind blows from (degrees in [0, 360), 1
+    decimal; 0 = north, 90 = east). Direction is null when the stored speed is 0.00 (calm)."""
+    speed = np.hypot(u, v).round(2)
+    direction = ((np.degrees(np.arctan2(-u, -v)) + 360.0) % 360.0).round(1) % 360.0
     return speed, direction.where(speed > 0)
 
 
@@ -126,8 +130,8 @@ def to_silver(
             "pressure_hpa": (ds_frame["sp"].astype("float64") / 100.0).round(2),
             "pressure_type": "surface",
             "precipitation_mm": (ds_frame["tp"].astype("float64") * 1000.0).round(3),
-            "wind_speed_ms": speed.round(2),
-            "wind_direction_deg": direction.round(1),
+            "wind_speed_ms": speed,
+            "wind_direction_deg": direction,
             "cloud_cover_percent": (ds_frame["tcc"].astype("float64") * 100.0).round(1),
             "solar_radiation_wm2": np.nan,
             "dew_point_c": td_c.round(2),
@@ -156,12 +160,12 @@ def _read(client: Minio, bucket: str, key: str) -> bytes | None:
 def read_bronze(
     client: Minio, location: str, start_year: int, end_year: int
 ) -> tuple[pd.DataFrame, dict]:
-    """The checked Bronze time series of one location as a frame, and its manifest."""
-    _, manifest_key = bronze_keys(location, start_year, end_year)
-    body = _read(client, BUCKET_BRONZE, manifest_key)
-    if body is None:
-        raise FileNotFoundError(f"no Bronze manifest {manifest_key}")
-    manifest = json.loads(body)
+    """The checked Bronze time series covering the window, as a frame, and its manifest."""
+    manifest = find_current(client, location, start_year, end_year)
+    if manifest is None:
+        raise FileNotFoundError(
+            f"no current Bronze ERA5 time series for {location} covering {start_year}-{end_year}"
+        )
     raw = _read(client, BUCKET_BRONZE, manifest["object_key"])
     if raw is None:
         raise FileNotFoundError(f"Bronze object {manifest['object_key']} is missing")
@@ -222,7 +226,8 @@ def transform_location(
         "written": 0,
         "skipped_existing": 0,
     }
-    for year in range(start_year, end_year + 1):
+    parts = {}
+    for year in range(start_year, end_year + 1):  # check every year before writing any
         start = datetime(year, 1, 1, tzinfo=timezone.utc)
         end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
         part = df[(df["timestamp_utc"] >= start) & (df["timestamp_utc"] < end)]
@@ -237,6 +242,8 @@ def transform_location(
         }
         if cov["missing_hours"] or cov["out_of_bounds_count"] or cov["unaligned_hours_count"]:
             raise ValueError(f"{location} {year}: incomplete hourly grid {cov}")
+        parts[year] = part
+    for year, part in parts.items():
         for month, month_df in part.groupby(part["timestamp_utc"].dt.month):
             key = silver_key(location, year, int(month))
             if not overwrite:

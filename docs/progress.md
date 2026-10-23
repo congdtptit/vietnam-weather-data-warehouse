@@ -1127,3 +1127,20 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
 - Docs corrected: data contract (gridded download stopped; quality gate row now names ERA5 complete hours, ERA5 pressure limit, ERA5 missing values), task specs §8, `docs/architecture.md`, `docs/NAMING_CONVENTIONS.md`, `docs/warehouse-schema.md` (`pressure_type` for ERA5), `README.md` (ERA5 in the ETL list, 1,490,237 rows, test counts), `scripts/quality_gate.py` docstring.
 - Power BI package: not sent yet; the user waits for the fixes above and the remaining real-data checks (time alignment, rain timing, wind direction against Open-Meteo) before the final dump.
 - Next step: fix M1, M2, L1–L4 with tests; run the three real-data checks; reload ERA5 if a fix changes values (L2/L3); final dump.
+
+## ERA5 review fixes, real-data checks, ERA5 reload, final Power BI dump — 2026-10-23
+
+- Related work: workbook IDs 5, 14, 15, 17, 18, 24; the open findings recorded in the previous entry (independent review of `feat/era5-timeseries`).
+- Real-data checks first (Silver 2016–2025, ERA5 against Open-Meteo, HAN, LCA, HPH): correlation peaks at lag 0 h for temperature (0.979, 0.961, 0.966), humidity, and hourly precipitation (0.428, 0.383, 0.462), so there is no time shift and the rain hours are aligned with Open-Meteo's preceding-hour totals. Wind direction with both speeds > 2 m/s: median absolute difference 6.8°, 11.3°, 10.5° (92–98% within 45°); a 180° inversion would give about 170°. ERA5 Silver had 140 directions of 360.0 and 5 calm hours with a direction (findings L2, L3 confirmed).
+- Fixes (branch `fix/era5-review`):
+  - M1, L5: `scripts/ingest_era5_timeseries.py` `find_current()` reuses any stored, checksum-valid series covering the window whose request has today's variables and coordinates (narrowest first); `scripts/transform_era5_to_silver.py` reads that object.
+  - M2: a download must contain exactly the requested hours (missing, extra, and duplicate steps are reported).
+  - L1: the transform checks every year before writing any Silver object.
+  - L2, L3: direction in [0, 360) after rounding; null when the rounded speed is 0.00. The gate's ERA5 0% missing limit no longer includes wind direction.
+  - L4: the comparison summary skips statistics a group does not have; correlation is undefined (null), not NaN, when a side is constant.
+  - L6: loader test with one Open-Meteo and one ERA5 object in the same month (one row per source, station key null, surface pressure).
+  - Tests: 10 new; `make test` → 194 passed (19 warnings, unchanged); `make test-integration` → 19 passed.
+- Run: DAG `manual__2026-10-23T07:24:22` (2016–2025, all locations): 14/14 tasks on the first try; ERA5 ingestion "covered by current …20160101_20251231.zip" for all 8; `quality_gate` 1,032 checks, 0 failed, 0 warnings; `load_gold_observations` 307.3 s; reconcile 1,490,237 = 1,490,237 hourly and 17,866 = 17,866 daily. After: ERA5 701,376 rows, 0 directions of 360, 5 null (calm); Open-Meteo, Meteostat, rain totals, daily rain, and forecast outcomes unchanged. A separate run `ingest_era5_timeseries.py --start-year 2024 --end-year 2024 --location HAN` skipped as covered, with no CDS request.
+- Final Power BI dump: `outputs/powerbi_handoff/weather_dwh.dump` 33.6 MB, SHA-256 `7e900db14c2b3abc3f5e8cb7eb9d1aaec1d15a219bb88fe19c5b477b7437fdfd`; restored into a disposable PostgreSQL 16 container and identical to the live DW (including the direction counts); guide checksum and size updated and republished; `outputs/powerbi_handoff.zip` rebuilt. Reference values in the guide are unchanged (no wind-direction measure).
+- Not changed: Open-Meteo and Meteostat write north as 360 (their own convention, within the contract's [0, 360]); `dim_source.update_frequency` 'Monthly Bulk' for ERA5 (a seed value).
+- Next step: the user sends the package; then IDs 36 and 26.

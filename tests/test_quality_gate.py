@@ -276,3 +276,10 @@ def test_missing_era5_month_blocks_the_load_and_era5_pressure_has_its_own_limit(
     (era5,) = _checks(report, "H09_plausible_values", "ERA5")
     assert report["warnings"] == 0 and era5["status"] == "PASS"
     assert era5["limits"]["pressure_hpa"] == [900.0, 1050.0]
+
+
+def test_calm_hours_without_era5_direction_do_not_warn():
+    jan = _hourly("ERA5", 1)
+    jan.loc[:4, "wind_direction_deg"] = np.nan  # calm: direction null by contract
+    report = _run(_silver(**{ERA5_KEY.format(m=1): jan}))
+    assert report["warnings"] == 0
