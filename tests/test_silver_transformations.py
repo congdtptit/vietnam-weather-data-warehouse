@@ -532,9 +532,9 @@ def test_ingest_raises_on_access_denied(monkeypatch):
     import ingest_meteostat
 
     client = Mock()
-    client.stat_object.side_effect = S3Error(
-        "AccessDenied", "Access Denied", "/res", "req", "host", None
-    )
+    denied = S3Error("AccessDenied", "Access Denied", "/res", "req", "host", None)
+    client.stat_object.side_effect = denied
+    client.get_object.side_effect = denied  # manifest read
 
     monkeypatch.setattr(ingest_meteostat, "get_minio_client", lambda: client)
 
@@ -551,12 +551,16 @@ def test_ingest_handles_404_as_allowed_skip(monkeypatch):
     import ingest_meteostat
 
     client = Mock()
-    client.stat_object.side_effect = S3Error("NoSuchKey", "missing", "/res", "req", "host", None)
+    missing = S3Error("NoSuchKey", "missing", "/res", "req", "host", None)
+    client.stat_object.side_effect = missing
+    client.get_object.side_effect = missing
 
     monkeypatch.setattr(ingest_meteostat, "get_minio_client", lambda: client)
     # Mock HTTP 404 return
     monkeypatch.setattr(
-        ingest_meteostat, "fetch_meteostat_station_year", lambda station_id, year: None
+        ingest_meteostat,
+        "fetch_meteostat_station_year",
+        lambda station_id, year: (404, None, "https://example/404", None),
     )
 
     summary = ingest_meteostat.ingest_meteostat_data(
@@ -568,6 +572,9 @@ def test_ingest_handles_404_as_allowed_skip(monkeypatch):
     assert summary["failure_count"] == 0
     assert summary["not_found_count"] == 1
     assert summary["success_count"] == 0
+    # The 404 is recorded in a manifest so the next run does not ask again
+    (key,) = [c.args[1] for c in client.put_object.call_args_list]
+    assert key == "meteostat/manifests/year=2024/meteostat_station_48820_hourly_2024.json"
 
 
 # -----------------------------------------------------------------------------
@@ -654,6 +661,36 @@ def test_process_open_meteo_to_silver_small_mock_run(monkeypatch, hourly_payload
     assert (df_res["location_code"] == "HAN").all()
 
 
+def _meteostat_bronze_get(raw_csv: bytes, station_id: str = "48820", year: int = 2024):
+    """get_object side effect serving a Meteostat manifest and its received .csv.gz."""
+    import gzip
+    import hashlib
+
+    from ingest_meteostat import bronze_keys
+
+    data_key, manifest_key, _ = bronze_keys(station_id, year)
+    body = gzip.compress(raw_csv, mtime=0)
+    store = {
+        data_key: body,
+        manifest_key: json.dumps(
+            {
+                "http_status": 200,
+                "payload_key": data_key,
+                "sha256": hashlib.sha256(body).hexdigest(),
+                "csv_sha256": hashlib.sha256(raw_csv).hexdigest(),
+            }
+        ).encode(),
+    }
+
+    def get(bucket_name, object_name):
+        if object_name not in store:
+            raise S3Error("NoSuchKey", "missing", "/res", "req", "host", None)
+        payload = store[object_name]
+        return SimpleNamespace(read=lambda: payload, close=lambda: None, release_conn=lambda: None)
+
+    return get
+
+
 def test_process_meteostat_to_silver_small_mock_run(monkeypatch):
     """Small-scope slice verification of Meteostat Silver transformer using mock MinIO."""
     import transform_meteostat_to_silver as ms_silver
@@ -666,7 +703,7 @@ def test_process_meteostat_to_silver_small_mock_run(monkeypatch):
     )
 
     client = Mock()
-    client.get_object.return_value = SimpleNamespace(read=lambda: raw_csv)
+    client.get_object.side_effect = _meteostat_bronze_get(raw_csv)
     client.stat_object.side_effect = S3Error("NoSuchKey", "missing", "/res", "req", "host", None)
 
     uploaded_objects: dict[str, bytes] = {}
@@ -731,7 +768,7 @@ def test_process_meteostat_overwrite_removes_stale_silver_months(monkeypatch):
         raise S3Error("NoSuchKey", "missing", "/res", "req", "host", None)
 
     client = Mock()
-    client.get_object.return_value = SimpleNamespace(read=lambda: raw_csv)
+    client.get_object.side_effect = _meteostat_bronze_get(raw_csv)
     client.stat_object.side_effect = mock_stat
     uploaded: dict[str, bytes] = {}
     client.put_object.side_effect = lambda bucket_name, object_name, data, length, content_type: (

@@ -1,16 +1,25 @@
 #!/usr/bin/env python3
 """scripts/ingest_meteostat.py.
 
-Collect historical weather observation data from the Meteostat Bulk Data Archive
-and store unaltered raw CSV bytes into the Bronze layer on MinIO Data Lake.
+Collect hourly station data from the Meteostat Bulk Data Archive and store the received
+.csv.gz bytes unchanged in the Bronze layer, with a JSON manifest per station-year (workbook
+ID 9). A station-year the archive does not have (HTTP 404) also gets a manifest, so reruns
+do not request it again (use --recheck-missing to ask again).
 
-Bronze path structure (per docs/NAMING_CONVENTIONS.md):
-  meteostat/station_hourly/year=YYYY/meteostat_station_<station_id>_hourly_<YYYY>.csv
+Bronze keys (per docs/NAMING_CONVENTIONS.md):
+  meteostat/station_hourly/year=YYYY/meteostat_station_<station_id>_hourly_<YYYY>.csv.gz
+  meteostat/manifests/year=YYYY/meteostat_station_<station_id>_hourly_<YYYY>.json
+
+Until 2026-10-23 Bronze held the decompressed CSV (same name without .gz) and no manifest.
+The first run after that date replaces such a file only when the download decompresses to
+exactly the same bytes; otherwise it keeps the file and fails the station-year.
 """
 
 import argparse
 import gzip
+import hashlib
 import io
+import json
 import os
 import sys
 import time
@@ -85,16 +94,28 @@ def get_minio_client() -> Minio:
         return client
 
 
+def bronze_keys(station_id: str, year: int) -> tuple[str, str, str]:
+    """(received .csv.gz, JSON manifest, legacy decompressed .csv written before 2026-10-23)."""
+    name = f"meteostat_station_{station_id}_hourly_{year}"
+    return (
+        f"meteostat/station_hourly/year={year}/{name}.csv.gz",
+        f"meteostat/manifests/year={year}/{name}.json",
+        f"meteostat/station_hourly/year={year}/{name}.csv",
+    )
+
+
 def fetch_meteostat_station_year(
     station_id: str,
     year: int,
     max_retries: int = 3,
     timeout: int = 20,
-) -> bytes | None:
-    """Download .csv.gz file from Meteostat bulk archive and decompress to raw CSV bytes.
+) -> tuple[int, bytes | None, str, str | None]:
+    """Download one station-year .csv.gz from the Meteostat bulk archive, unchanged.
 
-    Returns None if upstream archive reports 404 (station has no hourly records for that year).
-    Raises requests.RequestException or RuntimeError on connection, timeout, or server errors.
+    Returns (http_status, received bytes or None, url, Last-Modified header). HTTP 404
+    returns (404, None, url, None): the station has no hourly records for that year.
+    Raises RuntimeError on connection, timeout, or server errors after the retries, and on
+    a body that is not gzip (so a broken download is never stored).
     """
     url = METEOSTAT_BULK_HOURLY_URL.format(year=year, station=station_id)
     delay = 2
@@ -103,10 +124,11 @@ def fetch_meteostat_station_year(
         try:
             resp = requests.get(url, timeout=timeout)
             if resp.status_code == 200:
-                return gzip.decompress(resp.content)
+                gzip.decompress(resp.content)  # validate only; Bronze keeps the received bytes
+                return 200, resp.content, url, resp.headers.get("Last-Modified")
             elif resp.status_code == 404:
                 # Allowed skip: station did not report hourly data for this year
-                return None
+                return 404, None, url, None
             elif resp.status_code == 429:
                 print(f"      [!] Rate limited (HTTP 429), retrying after {delay}s...")
                 time.sleep(delay)
@@ -117,7 +139,7 @@ def fetch_meteostat_station_year(
                 delay *= 2
             else:
                 resp.raise_for_status()
-        except (requests.RequestException, gzip.BadGzipFile) as ex:
+        except (requests.RequestException, gzip.BadGzipFile, EOFError) as ex:
             if attempt == max_retries:
                 raise RuntimeError(
                     f"Failed to fetch Meteostat station {station_id} for year {year} "
@@ -130,6 +152,80 @@ def fetch_meteostat_station_year(
             delay *= 2
 
     raise RuntimeError(f"Exhausted retries fetching Meteostat station {station_id} year {year}")
+
+
+def build_manifest(
+    station_id: str,
+    year: int,
+    url: str,
+    status: int,
+    body: bytes | None,
+    last_modified: str | None,
+) -> dict[str, Any]:
+    """Describe a stored object (HTTP 200) or a station-year the archive does not have (404)."""
+    manifest: dict[str, Any] = {
+        "source": "Meteostat Bulk Archive",
+        "product": "hourly station data (.csv.gz)",
+        "station_id": station_id,
+        "year": year,
+        "url": url,
+        "http_status": status,
+        "retrieved_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    if status != 200 or body is None:
+        return {**manifest, "payload_key": None}
+    csv = gzip.decompress(body)
+    return {
+        **manifest,
+        "upstream_last_modified": last_modified,
+        "payload_key": bronze_keys(station_id, year)[0],
+        "payload_encoding": "gzip (as received)",
+        "byte_size": len(body),
+        "sha256": hashlib.sha256(body).hexdigest(),
+        "csv_byte_size": len(csv),
+        "csv_sha256": hashlib.sha256(csv).hexdigest(),
+        "csv_lines": csv.count(b"\n"),
+    }
+
+
+def read_manifest(client: Minio, key: str) -> dict[str, Any] | None:
+    try:
+        resp = client.get_object(BUCKET_BRONZE, key)
+    except S3Error as err:
+        if is_s3_not_found_error(err):
+            return None
+        raise
+    try:
+        return json.loads(resp.read())
+    finally:
+        resp.close()
+        resp.release_conn()
+
+
+def _read(client: Minio, key: str) -> bytes | None:
+    try:
+        resp = client.get_object(BUCKET_BRONZE, key)
+    except S3Error as err:
+        if is_s3_not_found_error(err):
+            return None
+        raise
+    try:
+        return resp.read()
+    finally:
+        resp.close()
+        resp.release_conn()
+
+
+def _payload_matches(client: Minio, manifest: dict[str, Any]) -> bool:
+    """True when the manifest's object exists with the recorded byte size."""
+    try:
+        return client.stat_object(BUCKET_BRONZE, manifest["payload_key"]).size == manifest.get(
+            "byte_size"
+        )
+    except S3Error as err:
+        if is_s3_not_found_error(err):
+            return False
+        raise
 
 
 def is_s3_not_found_error(err: Any) -> bool:
@@ -154,16 +250,74 @@ def is_s3_not_found_error(err: Any) -> bool:
     return False
 
 
+def ingest_station_year(
+    client: Minio,
+    sid: str,
+    year: int,
+    overwrite: bool = False,
+    recheck_missing: bool = False,
+) -> str:
+    """Bring one station-year to a current Bronze state; return what happened.
+
+    Outcomes: "skipped" (manifest and object current), "not_found_known" (a stored 404
+    manifest; no request), "not_found" (HTTP 404, recorded), "stored", "replaced_legacy"
+    (the received file decompresses to exactly the legacy CSV, which is then removed).
+    A legacy CSV that differs from the download is kept, and the station-year fails, so
+    changed upstream data never replaces Bronze without --overwrite.
+    """
+    data_key, manifest_key, legacy_key = bronze_keys(sid, year)
+    if not overwrite:
+        manifest = read_manifest(client, manifest_key)
+        if manifest is not None:
+            if manifest["http_status"] == 404 and not recheck_missing:
+                return "not_found_known"
+            if manifest["http_status"] == 200 and _payload_matches(client, manifest):
+                return "skipped"
+
+    status, body, url, last_modified = fetch_meteostat_station_year(station_id=sid, year=year)
+    manifest = build_manifest(sid, year, url, status, body, last_modified)
+    outcome = "not_found" if status == 404 else "stored"
+    legacy = _read(client, legacy_key)
+    if status == 404 and legacy is not None and not overwrite:
+        raise RuntimeError(
+            f"the archive no longer has {sid} {year} (HTTP 404), but {legacy_key} exists; "
+            "kept unchanged. Pass --overwrite to record the station-year as missing"
+        )
+    if status == 200 and legacy is not None:
+        if gzip.decompress(body) != legacy and not overwrite:
+            raise RuntimeError(
+                f"{legacy_key} differs from the current download; kept unchanged. "
+                "Pass --overwrite to replace it with the new data"
+            )
+        outcome = "replaced_legacy"
+    if status == 200:
+        client.put_object(
+            BUCKET_BRONZE,
+            data_key,
+            io.BytesIO(body),
+            len(body),
+            content_type="application/gzip",
+        )
+    mbytes = json.dumps(manifest, indent=2).encode("utf-8")
+    client.put_object(
+        BUCKET_BRONZE, manifest_key, io.BytesIO(mbytes), len(mbytes), "application/json"
+    )
+    if legacy is not None and status == 200:
+        client.remove_object(BUCKET_BRONZE, legacy_key)
+    return outcome
+
+
 def ingest_meteostat_data(
     start_year: int = 2016,
     end_year: int = 2025,
     station_ids: list[str] | None = None,
     overwrite: bool = False,
+    recheck_missing: bool = False,
 ) -> dict[str, Any]:
-    """Ingest Meteostat raw data into MinIO Bronze layer.
+    """Ingest Meteostat station-years into the Bronze layer with a manifest each.
 
-    Aggregates successes, skips, 404s, and failures.
-    Raises RuntimeError if any requested task encounters a real failure.
+    Aggregates the outcomes of ingest_station_year. Raises RuntimeError if any requested
+    station-year failed.
     """
     client = get_minio_client()
 
@@ -201,121 +355,51 @@ def ingest_meteostat_data(
     print(f"[*] Total tasks to evaluate: {total_tasks}")
     print("=" * 80)
 
-    current_idx = 0
-    success_count = 0
-    skipped_count = 0
-    not_found_count = 0
+    counts = dict.fromkeys(
+        ("stored", "replaced_legacy", "skipped", "not_found", "not_found_known"), 0
+    )
+    messages = {
+        "stored": "stored with manifest",
+        "replaced_legacy": "stored; identical legacy CSV removed",
+        "skipped": "current (manifest and object match), skipping",
+        "not_found": "NO DATA (HTTP 404), recorded in manifest",
+        "not_found_known": "no data upstream (404 recorded earlier), not requested",
+    }
     failures: list[dict[str, Any]] = []
-
+    current_idx = 0
     for sid, sinfo in selected_stations.items():
-        st_name = sinfo.get("station_name", f"Station {sid}")
-        print(f"\n>>> Processing station [{sid}] - {st_name}")
-
+        print(f"\n>>> Processing station [{sid}] - {sinfo.get('station_name', f'Station {sid}')}")
         for year in years:
             current_idx += 1
-            object_path = (
-                f"meteostat/station_hourly/year={year}/meteostat_station_{sid}_hourly_{year}.csv"
-            )
-
-            # Check if object already exists in Bronze
-            if not overwrite:
-                try:
-                    stat = client.stat_object(BUCKET_BRONZE, object_path)
-                    if stat.size > 200:
-                        print(
-                            f"  [{current_idx}/{total_tasks}] Year {year}: {object_path} -> EXISTS ({stat.size} bytes), skipping."
-                        )
-                        skipped_count += 1
-                        continue
-                except S3Error as s3_err:
-                    if is_s3_not_found_error(s3_err):
-                        pass  # Object not found: proceed to download
-                    else:
-                        print(
-                            f"  [{current_idx}/{total_tasks}] Year {year}: MinIO stat_object error: {s3_err}"
-                        )
-                        failures.append(
-                            {
-                                "station_id": sid,
-                                "year": year,
-                                "stage": "stat_object",
-                                "error": str(s3_err),
-                            }
-                        )
-                        continue
-                except Exception as ex:
-                    print(
-                        f"  [{current_idx}/{total_tasks}] Year {year}: Unexpected error during stat_object: {ex}"
-                    )
-                    failures.append(
-                        {
-                            "station_id": sid,
-                            "year": year,
-                            "stage": "stat_object",
-                            "error": str(ex),
-                        }
-                    )
-                    continue
-
-            print(
-                f"  [{current_idx}/{total_tasks}] Year {year}: Checking/fetching station {sid} ...",
-                end="",
-                flush=True,
-            )
-
             try:
-                csv_bytes = fetch_meteostat_station_year(station_id=sid, year=year)
-
-                if csv_bytes is None:
-                    print(" NO DATA (HTTP 404 - no hourly reports for this station-year)")
-                    not_found_count += 1
-                    continue
-
-                # Preserve raw bytes and record provenance metadata in MinIO object
-                metadata = {
-                    "source": "Meteostat Bulk Archive",
-                    "station_id": sid,
-                    "year": str(year),
-                    "ingested_at": datetime.now(timezone.utc).isoformat(),
-                }
-
-                client.put_object(
-                    bucket_name=BUCKET_BRONZE,
-                    object_name=object_path,
-                    data=io.BytesIO(csv_bytes),
-                    length=len(csv_bytes),
-                    content_type="text/csv",
-                    metadata=metadata,
-                )
-
-                line_count = csv_bytes.count(b"\n")
-                print(f" OK ({line_count:,} CSV lines, {len(csv_bytes) / 1024:.1f} KB)")
-                success_count += 1
-                time.sleep(0.5)
-
+                outcome = ingest_station_year(client, sid, year, overwrite, recheck_missing)
             except Exception as err:
-                print(f" FAILED: {err}")
+                print(f"  [{current_idx}/{total_tasks}] Year {year}: FAILED: {err}")
                 failures.append(
-                    {
-                        "station_id": sid,
-                        "year": year,
-                        "stage": "fetch_or_upload",
-                        "error": str(err),
-                    }
+                    {"station_id": sid, "year": year, "stage": "ingest", "error": str(err)}
                 )
+                continue
+            counts[outcome] += 1
+            print(f"  [{current_idx}/{total_tasks}] Year {year}: {messages[outcome]}")
+            if outcome in ("stored", "replaced_legacy"):
+                time.sleep(0.5)
 
     print("\n" + "=" * 80)
     print(" METEOSTAT INGESTION SUMMARY:")
-    print(f"  + Newly ingested files      : {success_count}")
-    print(f"  + Already existing (skipped): {skipped_count}")
-    print(f"  + Upstream 404 (no data)    : {not_found_count}")
+    print(f"  + Newly stored files        : {counts['stored'] + counts['replaced_legacy']}")
+    print(f"    (legacy CSV replaced)     : {counts['replaced_legacy']}")
+    print(f"  + Already current (skipped) : {counts['skipped']}")
+    print(f"  + Upstream 404 (no data)    : {counts['not_found'] + counts['not_found_known']}")
+    print(f"    (known, not requested)    : {counts['not_found_known']}")
     print(f"  + Total failures encountered: {len(failures)}")
     print("=" * 80)
 
     summary = {
-        "success_count": success_count,
-        "skipped_count": skipped_count,
-        "not_found_count": not_found_count,
+        "success_count": counts["stored"] + counts["replaced_legacy"],
+        "replaced_legacy_count": counts["replaced_legacy"],
+        "skipped_count": counts["skipped"],
+        "not_found_count": counts["not_found"] + counts["not_found_known"],
+        "not_found_known_count": counts["not_found_known"],
         "failure_count": len(failures),
         "failures": failures,
     }
@@ -347,6 +431,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--overwrite", action="store_true", help="Overwrite existing objects in Bronze"
     )
+    parser.add_argument(
+        "--recheck-missing",
+        action="store_true",
+        help="Request again station-years recorded as HTTP 404",
+    )
 
     args = parser.parse_args()
     station_list = [s.strip() for s in args.stations.split(",")] if args.stations else None
@@ -357,6 +446,7 @@ if __name__ == "__main__":
             end_year=args.end_year,
             station_ids=station_list,
             overwrite=args.overwrite,
+            recheck_missing=args.recheck_missing,
         )
         sys.exit(0)
     except KeyboardInterrupt:
