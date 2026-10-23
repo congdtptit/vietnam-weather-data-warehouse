@@ -80,6 +80,9 @@ SILVER_STANDARD_COLUMNS = [
     "weather_code",
     "wind_gusts_ms",
     "observation_type",
+    "grid_latitude",
+    "grid_longitude",
+    "grid_elevation_m",
 ]
 
 MEASUREMENT_COLUMNS = [
@@ -155,12 +158,16 @@ def clean_and_standardize_open_meteo(
 
     Rules:
     1. Validate canonical location code.
-    2. Parse timestamp string to UTC and Asia/Ho_Chi_Minh local time.
+    2. Parse timestamp string to UTC and Asia/Ho_Chi_Minh local time. The requests ask for
+       timezone=UTC, so the payload's utc_offset_seconds must be 0; any other or missing
+       offset raises instead of silently shifting every hour.
     3. Pressure type: Open-Meteo provides surface_pressure, stored as pressure_type='surface'.
     4. Range validation without clipping: negative precipitation and out-of-range humidity set to NaN.
     5. Deduplication: deterministic on (source_name, location_code, timestamp_utc).
        Identical duplicates are deduplicated; conflicting duplicates are quarantined.
     6. Chronological hourly coverage calculated on [start_time, end_time).
+    7. The grid cell Open-Meteo answered for (payload latitude, longitude, elevation) is
+       kept as grid_latitude, grid_longitude, grid_elevation_m.
     """
     loc_clean = location_code.strip().upper()
     if loc_clean not in CANONICAL_LOCATIONS:
@@ -171,6 +178,16 @@ def clean_and_standardize_open_meteo(
     hourly = raw_json.get("hourly", {})
     if not hourly or "time" not in hourly:
         raise ValueError("JSON payload does not contain valid 'hourly.time' data")
+    offset = raw_json.get("utc_offset_seconds")
+    if offset != 0:
+        raise ValueError(
+            f"payload utc_offset_seconds is {offset!r}, expected 0 (requests use timezone=UTC)"
+        )
+    grid = {
+        "grid_latitude": raw_json.get("latitude"),
+        "grid_longitude": raw_json.get("longitude"),
+        "grid_elevation_m": raw_json.get("elevation"),
+    }
 
     df = pd.DataFrame(hourly)
     initial_rows = len(df)
@@ -229,6 +246,8 @@ def clean_and_standardize_open_meteo(
     # Pressure type: explicit surface pressure
     df["pressure_type"] = "surface"
     df["observation_type"] = "model_reanalysis"
+    for col, value in grid.items():
+        df[col] = float("nan") if value is None else float(value)
 
     # Ensure numeric types
     for col in MEASUREMENT_COLUMNS:
@@ -272,6 +291,8 @@ def clean_and_standardize_open_meteo(
         "deduplication": dedup_stats,
         "range_violations": range_violations,
         "null_counts": {k: int(v) for k, v in clean_standard.isnull().sum().items()},
+        "utc_offset_seconds": offset,
+        "grid": grid,
         "provenance_notes": (
             "Open-Meteo pressure is surface pressure (pressure_type='surface'). "
             "Downstream consumers must not equate surface pressure with sea-level pressure."

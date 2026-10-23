@@ -1268,3 +1268,23 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
   - Provinces: 8 of 8 points in their `dim_location` province. Station 48823 is in Nam Định (role `substitute_neighbouring_province`, as decided). The 48820 coordinate (21.221, 105.807; Nội Bài airport per ISD) falls 2.5 km inside Vĩnh Phúc on the geoBoundaries polygon; not resolved (no second boundary source was checked). 48840 Thanh Hóa is outside the 25-province northern subset.
   - `dim_station` equals the registry. DW fingerprint unchanged.
 - Limits: the stored distances stay spherical; replacing them with the GeoPandas values would change `dim_station.distance_km` for 48820 (22.0 → 21.9) and the GHCNh value for 48825 (11.3 → 11.4), so it is not done while the Power BI data is frozen. The registry, not this script, still feeds the loaders.
+
+## Open-Meteo Silver keeps the grid cell and checks the UTC offset (ID 10) — 2026-10-23
+
+- Related work: workbook ID 10 (Open-Meteo/Meteostat → Silver: units, UTC, duplicates, missing values); the audit gap of 2026-10-22 in the data contract. Open-Meteo Silver dropped the API's grid coordinates and elevation and assigned UTC to the naive `time` values without checking `utc_offset_seconds`; the Bronze manifest already held both. The DW data behind the Power BI package had to stay unchanged.
+- Changes:
+  - `scripts/transform_open_meteo_to_silver.py`: a payload whose `utc_offset_seconds` is not 0, or is missing, now fails; the requests set `timezone=UTC`. New Silver columns `grid_latitude`, `grid_longitude`, `grid_elevation_m` from the payload (the cell the API answered for); offset and grid also go to the DQ report.
+  - `tests/test_silver_transformations.py`: the grid columns are kept; offsets 25200 and missing are rejected.
+  - Docs: data contract (gap closed; grid columns in the standard column table), `README.md`.
+- Checks: `ruff`; `make test` → 247 passed.
+- Real data:
+  - `transform_open_meteo_to_silver.py --start-year 2016 --end-year 2025 --overwrite` (34 s): 80 payloads, all offset 0, 0 failures; 960 objects, 701,376 rows.
+  - Compared with a snapshot taken before: the same 960 objects and row counts, and every previous column identical (content hash per object).
+  - One grid cell per location over the 10 years, for example HAN 21.05448, 105.898476, 19 m; LCA 22.460455, 103.98964, 92 m.
+  - Downstream, all on the real 2016–2025 data:
+    - `quality_gate.py` 2016–2025: 1,032 checks, 0 failed, 0 warnings.
+    - `load_gold_observations.py` 2016–2025: 301.6 s, 0 failures; the Gold monthly objects now carry the Open-Meteo grid columns.
+    - `reconcile_dw.py`: 1,490,237 = 1,490,237 hourly, 17,866 = 17,866 daily (`gold/quality_reports/reconcile_2016_2025_20261023T122150Z.json`).
+    - DW fingerprint identical (the loader inserts named columns only).
+    - `score_cart.py` 2025: 364 Gold prediction days unchanged.
+- Limits: labels and features v2 were built before this change. They read only named columns, so rebuilding them would give the same values; they were not rebuilt.

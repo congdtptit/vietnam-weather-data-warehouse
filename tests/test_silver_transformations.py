@@ -342,6 +342,10 @@ def test_pressure_type_and_provenance():
     """Open-Meteo has pressure_type='surface', Meteostat has pressure_type='sea_level'."""
     # Open-Meteo payload
     open_meteo_raw = {
+        "latitude": 21.0,
+        "longitude": 105.875,
+        "elevation": 16.0,
+        "utc_offset_seconds": 0,
         "hourly": {
             "time": ["2024-01-01T00:00"],
             "temperature_2m": [22.0],
@@ -352,7 +356,7 @@ def test_pressure_type_and_provenance():
             "wind_direction_10m": [120.0],
             "cloud_cover": [40.0],
             "shortwave_radiation": [0.0],
-        }
+        },
     }
     om_clean, _, _ = clean_and_standardize_open_meteo(
         raw_json=open_meteo_raw,
@@ -364,6 +368,24 @@ def test_pressure_type_and_provenance():
     assert om_clean.loc[0, "pressure_type"] == "surface"
     assert om_clean.loc[0, "pressure_hpa"] == 1008.5
     assert om_clean.loc[0, "observation_type"] == "model_reanalysis"
+    # The grid cell Open-Meteo answered for is kept
+    assert om_clean.loc[0, ["grid_latitude", "grid_longitude", "grid_elevation_m"]].tolist() == [
+        21.0,
+        105.875,
+        16.0,
+    ]
+    # Local times would be shifted if the payload were not in UTC
+    for offset in (25200, None):
+        shifted = {**open_meteo_raw, "utc_offset_seconds": offset}
+        if offset is None:
+            del shifted["utc_offset_seconds"]
+        with pytest.raises(ValueError, match="utc_offset_seconds"):
+            clean_and_standardize_open_meteo(
+                raw_json=shifted,
+                location_code="HAN",
+                start_time="2024-01-01 00:00:00+00:00",
+                end_time="2024-01-01 01:00:00+00:00",
+            )
 
     # Meteostat CSV payload
     meteostat_csv = (
