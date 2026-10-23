@@ -5,10 +5,10 @@ Quality gate on Silver before the DW load (workbook ID 24, task `quality_gate` o
 dags/dag_weather_pipeline.py). Reads the Silver objects of a window of UTC years
 independently of the transform reports and checks:
 
-- hourly `weather_hourly/` (the sources loaded into fact_weather_observation): required
-  columns, non-null keys, UTC timestamps on the hour inside their partition month, unique
-  source x location x UTC hour, the valid ranges of docs/data-contract.md, and complete
-  hourly coverage for sources whose Bronze contract only accepts whole years (Open-Meteo);
+- hourly `weather_hourly/` and `era5/weather_hourly/` (the sources loaded into
+  fact_weather_observation): required columns, non-null keys, UTC timestamps on the hour
+  inside their partition month, unique source x location x UTC hour, the valid ranges of
+  docs/data-contract.md, and complete hourly coverage for Open-Meteo and ERA5;
 - GHCNh daily rain: required columns, unique station x rain day, the rain window
   (D-1 12:00 UTC, D 12:00 UTC], and 0 <= rain_24h_mm < 999.
 
