@@ -2,8 +2,8 @@
 
 Bronze -> Silver -> Gold -> DW for an explicit window of UTC years (workbook ID 17;
 specification in docs/task-specs-weeks-2-5.md section 5). Manual trigger only; incremental
-scheduling is ID 25. Hourly observations (Open-Meteo, Meteostat) go to
-fact_weather_observation; GHCNh daily station rain goes to fact_station_daily_rain.
+scheduling is ID 25. Hourly observations (Open-Meteo, Meteostat, and since 2026-10-23 ERA5
+point time series) go to fact_weather_observation; GHCNh daily station rain goes to fact_station_daily_rain.
 
 Each task runs an existing script; a non-zero exit fails the task. Ingestion skips objects
 whose manifest and checksum are current, transforms rewrite Silver for the window,
@@ -41,7 +41,7 @@ def script(name: str, args: str) -> str:
 
 with DAG(
     dag_id="weather_bronze_to_dw_dag",
-    description="Open-Meteo, Meteostat, GHCNh: Bronze -> Silver -> Gold -> DW, then reconcile",
+    description="Open-Meteo, Meteostat, ERA5, GHCNh: Bronze -> Silver -> Gold -> DW, then reconcile",
     schedule=None,
     start_date=datetime(2024, 1, 1),
     catchup=False,
@@ -85,6 +85,15 @@ with DAG(
         task_id="transform_ghcnh_to_silver",
         bash_command=script("transform_ghcnh_to_silver.py", YEARS + LOCATION + " --overwrite"),
     )
+    ingest_era5 = BashOperator(
+        task_id="ingest_era5_timeseries",
+        bash_command=script("ingest_era5_timeseries.py", YEARS + LOCATION),
+        **network,
+    )
+    silver_era5 = BashOperator(
+        task_id="transform_era5_to_silver",
+        bash_command=script("transform_era5_to_silver.py", YEARS + LOCATION + " --overwrite"),
+    )
     gate = BashOperator(
         task_id="quality_gate",
         bash_command=script("quality_gate.py", YEARS + LOCATION),
@@ -103,8 +112,9 @@ with DAG(
         bash_command=script("reconcile_dw.py", YEARS + LOCATION),
     )
 
-    check >> [ingest_om, ingest_ms, ingest_gh]
+    check >> [ingest_om, ingest_ms, ingest_era5, ingest_gh]
     ingest_om >> silver_om
     ingest_ms >> silver_ms
+    ingest_era5 >> silver_era5
     ingest_gh >> silver_gh
-    [silver_om, silver_ms, silver_gh] >> gate >> seed >> [load, load_rain] >> reconcile
+    [silver_om, silver_ms, silver_era5, silver_gh] >> gate >> seed >> [load, load_rain] >> reconcile

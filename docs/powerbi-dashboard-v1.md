@@ -33,10 +33,10 @@ docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USE
 | `public.dim_date` | 4,018 | Date dimension (mark as date table) |
 | `public.dim_time` | 24 | Hour of day |
 | `public.dim_location` | 8 | Research points |
-| `public.dim_source` | 5 | Sources (ERA5, NOAA, and GHCNh have no rows in these views: in Power Query keep only Open-Meteo and Meteostat, so the source slicer lists only sources with data) |
-| `public.vw_obs_daily` | 32,886 | Main daily fact |
-| `public.vw_obs_hourly` | 788,861 | Hourly fact for hour drill-down |
-| `public.vw_coverage` | 99 | Data-quality page |
+| `public.dim_source` | 5 | Sources (NOAA and GHCNh have no rows in these views: in Power Query keep only Open-Meteo, Meteostat, and ERA5, so the source slicer lists only sources with data) |
+| `public.vw_obs_daily` | 62,118 (with ERA5 since 2026-10-23) | Main daily fact |
+| `public.vw_obs_hourly` | 1,490,237 | Hourly fact for hour drill-down |
+| `public.vw_coverage` | 187 | Data-quality page |
 
 4. In Power Query, keep only the columns used; set `dim_date[full_date]` to type Date.
 
@@ -159,6 +159,9 @@ Set the filters in Power BI and compare with these values, which were computed f
 | Open-Meteo, HAN, 2024-07-15 14:00 (hourly page) | Rain Hourly / Temperature | 1.0 mm / 28.0 °C |
 | Open-Meteo, all 8 locations, March 2024 | Hot Days per Location | 0.50 (4 hot days at 8 locations) |
 | Open-Meteo, all 8 locations, January 2024 | Hot Days per Location | 0 (not BLANK) |
+| ERA5, HAN, 2024 (added 2026-10-23) | Rain per Location / Rainy Days / Hot Days | 2,239.3 mm / 190 / 41 |
+| ERA5, HAN, 2024 | Temperature Mean / Min / Max | 25.26 / 8.78 / 39.28 °C |
+| ERA5, all 8 locations, 2024 | Rain per Location / Rainy Days (location-days) | 2,406.3 mm / 1,572 |
 | Two sources selected | Any rain or temperature measure | BLANK |
 
 Ten-year Open-Meteo reference (2016–2025, mean per year): HAN 2,202.4 mm and 179.2 rainy days, LCA 2,949.4 mm and 247.3 rainy days (wettest), NBI 2,012.4 mm and 170.6 rainy days.

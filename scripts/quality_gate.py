@@ -33,6 +33,7 @@ import pandas as pd
 from load_gold_observations import (
     BUCKET_SILVER,
     LOADED_SOURCES,
+    SILVER_HOURLY_PREFIXES,
     get_minio_client,
     requested_locations,
 )
@@ -54,9 +55,9 @@ MEASUREMENTS = [
     "cloud_cover_percent",
     "solar_radiation_wm2",
 ]
-# Sources whose Bronze contract stores only whole-year responses (docs/data-contract.md,
-# "Open-Meteo Bronze"); for the others no coverage threshold is agreed.
-WHOLE_YEAR_SOURCES = {"Open-Meteo"}
+# Sources complete for every hour by contract: Open-Meteo Bronze stores only whole years, and
+# ERA5 Silver fails a location with a missing hour (docs/data-contract.md).
+WHOLE_YEAR_SOURCES = {"Open-Meteo", "ERA5"}
 RAIN_REQUIRED = ["station_id", "rain_day_utc", "window_start_utc", "window_end_utc", "rain_24h_mm"]
 RAIN_MAX_MM = 999.0  # GHCNh accepted values: 0 <= value < 999 mm (data contract)
 SAMPLE = 5
@@ -67,12 +68,16 @@ MIN_RAIN_DAY_COVERAGE_PCT = 90.0  # GHCNh, lowest station-year 95.89%
 MAX_MISSING_PCT = {  # % of expected hours; variables not listed are reported only
     "Open-Meteo": dict.fromkeys(MEASUREMENTS, 0.0),  # never missing; feeds the ML labels
     "Meteostat": {"temperature_c": 5.0, "humidity_percent": 5.0},  # worst year 0.45%
+    # ERA5 (added 2026-10-23): never missing; radiation is not requested, so not limited.
+    "ERA5": {c: 0.0 for c in MEASUREMENTS if c != "solar_radiation_wm2"},
 }
 PLAUSIBLE = {  # variable: (low, high); observed temperature 3.8-42.9, pressure 963.3-1041.0
     "temperature_c": (0.0, 45.0),
     "pressure_hpa": (950.0, 1050.0),
     "precipitation_mm": (None, 100.0),  # one hour; observed maximum 69.4 mm
 }
+# ERA5 surface pressure is at the grid cell's model terrain: 916.9 hPa (LCA) to 1039.8 observed.
+PLAUSIBLE_BY_SOURCE = {"ERA5": {"pressure_hpa": (900.0, 1050.0)}}
 EXTREME_RAIN_MM = 300.0  # the data contract's "unsupported extremes" limit
 # Days >= EXTREME_RAIN_MM already reviewed and recorded as real in docs/data-contract.md.
 REVIEWED_EXTREME_RAIN_DAYS = {("48825", "2016-05-25"), ("48831", "2025-10-07")}
@@ -211,7 +216,8 @@ def check_hourly_groups(df: pd.DataFrame, years: range) -> list[dict[str, Any]]:
             )
         )
         outside, samples = {}, {}
-        for col, (low, high) in PLAUSIBLE.items():
+        limits = {**PLAUSIBLE, **PLAUSIBLE_BY_SOURCE.get(src, {})}
+        for col, (low, high) in limits.items():
             values = group[col]
             mask = pd.Series(False, index=group.index)
             if low is not None:
@@ -230,7 +236,7 @@ def check_hourly_groups(df: pd.DataFrame, years: range) -> list[dict[str, Any]]:
                 "WARN",
                 not outside,
                 **scope,
-                limits={c: list(v) for c, v in PLAUSIBLE.items()},
+                limits={c: list(v) for c, v in limits.items()},
                 outside=outside,
                 sample_keys=samples,
                 min_max={
@@ -268,9 +274,13 @@ def gate_hourly(
 ) -> list[dict[str, Any]]:
     out, frames = [], []
     objects = rows_read = failed_objects = 0
-    for year in range(start_year, end_year + 1):
-        prefix = f"weather_hourly/year={year}/"
-        for obj in client.list_objects(BUCKET_SILVER, prefix=prefix, recursive=True):
+    listings = (
+        client.list_objects(BUCKET_SILVER, prefix=f"{base}/year={year}/", recursive=True)
+        for year in range(start_year, end_year + 1)
+        for base in SILVER_HOURLY_PREFIXES
+    )
+    for listing in listings:
+        for obj in listing:
             if not obj.object_name.endswith(".parquet"):
                 continue
             df = _read_parquet(client, obj.object_name)

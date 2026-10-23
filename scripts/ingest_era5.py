@@ -193,6 +193,17 @@ def is_current(client: Minio, manifest_key: str) -> bool:
     return stored is not None and hashlib.sha256(stored).hexdigest() == meta.get("sha256")
 
 
+def make_cds_client() -> Any:
+    """A cdsapi client from ~/.cdsapirc or CDSAPI_URL/CDSAPI_KEY; a clear error without them."""
+    if not (os.path.exists(os.path.expanduser("~/.cdsapirc")) or os.getenv("CDSAPI_KEY")):
+        raise RuntimeError(
+            "no CDS credentials: create ~/.cdsapirc or set CDSAPI_URL and CDSAPI_KEY"
+        )
+    import cdsapi
+
+    return cdsapi.Client()
+
+
 def months_in(start_year: int, end_year: int, months: list[int] | None) -> list[tuple[int, int]]:
     return [(y, m) for y in range(start_year, end_year + 1) for m in (months or range(1, 13))]
 
@@ -213,14 +224,7 @@ def ingest_era5(
         return {"requests": len(scope), "dry_run": True}
 
     client = client or get_minio_client()
-    if cds_client is None:
-        if not (os.path.exists(os.path.expanduser("~/.cdsapirc")) or os.getenv("CDSAPI_KEY")):
-            raise RuntimeError(
-                "no CDS credentials: create ~/.cdsapirc or set CDSAPI_URL and CDSAPI_KEY"
-            )
-        import cdsapi
-
-        cds_client = cdsapi.Client()
+    cds_client = cds_client or make_cds_client()
 
     counts = {"stored": 0, "skipped": 0}
     failures: list[str] = []

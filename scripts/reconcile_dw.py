@@ -3,7 +3,7 @@
 
 Reconcile fact_weather_observation with Silver for a window (workbook ID 17, final task of the
 Bronze -> DW DAG). Counts rows per source x location x UTC year in Silver `weather_hourly/`
-(the sources loaded by scripts/load_gold_observations.py) and in the DW, and fails when any
+and `era5/weather_hourly/` (the sources loaded by scripts/load_gold_observations.py) and in the DW, and fails when any
 group differs or exists on one side only. A JSON report is written to
 gold/quality_reports/reconcile_<start>_<end>[_<location>]_<timestamp>.json.
 
@@ -27,6 +27,7 @@ from load_gold_observations import (
     BUCKET_GOLD,
     BUCKET_SILVER,
     LOADED_SOURCES,
+    SILVER_HOURLY_PREFIXES,
     get_db_connection,
     get_minio_client,
     requested_locations,
@@ -56,8 +57,14 @@ def silver_counts(
 ) -> Counter[Key]:
     counts: Counter[Key] = Counter()
     for year in range(start_year, end_year + 1):
-        prefix = f"weather_hourly/year={year}/"
-        for obj in client.list_objects(BUCKET_SILVER, prefix=prefix, recursive=True):
+        objects = (
+            obj
+            for base in SILVER_HOURLY_PREFIXES
+            for obj in client.list_objects(
+                BUCKET_SILVER, prefix=f"{base}/year={year}/", recursive=True
+            )
+        )
+        for obj in objects:
             if not obj.object_name.endswith(".parquet"):
                 continue
             resp = client.get_object(BUCKET_SILVER, obj.object_name)
