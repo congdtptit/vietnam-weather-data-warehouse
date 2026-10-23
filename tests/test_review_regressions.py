@@ -45,6 +45,7 @@ def test_s3_error_404_in_request_id_fails_in_ingestion_and_silver(monkeypatch):
     # 1. Ingestion: must fail with RuntimeError, not skip
     client_ingest = Mock()
     client_ingest.stat_object.side_effect = internal_err
+    client_ingest.get_object.side_effect = internal_err  # manifest read
     monkeypatch.setattr(ingest_meteostat, "get_minio_client", lambda: client_ingest)
 
     with pytest.raises(RuntimeError, match="completed with 1 failure"):

@@ -4,6 +4,11 @@
 Clean and standardize Meteostat weather station observations from Bronze (CSV)
 to Silver (Parquet) according to docs/data-contract.md and docs/NAMING_CONVENTIONS.md.
 
+Bronze is read through its manifest (scripts/ingest_meteostat.py, since 2026-10-23): the
+received .csv.gz must match the manifest SHA-256, and the decompressed CSV its csv_sha256.
+A manifest recording HTTP 404 means the archive has no data for that station-year; a missing
+manifest fails the station-year.
+
 Silver storage structure:
   silver/weather_hourly/year=YYYY/month=MM/weather_hourly_meteostat_<station_id>_<YYYYMM>.parquet
   silver/stations/stations_metadata_cleaned.parquet
@@ -12,6 +17,8 @@ Quality reports:
 """
 
 import argparse
+import gzip
+import hashlib
 import io
 import json
 import os
@@ -21,6 +28,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from ingest_meteostat import bronze_keys, read_manifest
 from minio import Minio
 from minio.error import S3Error
 from quality_checks import (
@@ -149,6 +157,30 @@ def is_s3_not_found_error(err: Any) -> bool:
             return True
 
     return False
+
+
+def read_bronze_csv(client: Minio, station_id: str, year: int) -> bytes | None:
+    """The verified CSV of one station-year, or None when the archive has no data (404)."""
+    _, manifest_key, _ = bronze_keys(station_id, year)
+    manifest = read_manifest(client, manifest_key)
+    if manifest is None:
+        raise RuntimeError(
+            f"{manifest_key} is missing; run scripts/ingest_meteostat.py for {station_id} {year}"
+        )
+    if manifest["http_status"] == 404:
+        return None
+    resp = client.get_object(BUCKET_BRONZE, manifest["payload_key"])
+    try:
+        body = resp.read()
+    finally:
+        resp.close()
+        resp.release_conn()
+    if hashlib.sha256(body).hexdigest() != manifest["sha256"]:
+        raise ValueError(f"{manifest['payload_key']} does not match its manifest SHA-256")
+    csv = gzip.decompress(body)
+    if hashlib.sha256(csv).hexdigest() != manifest["csv_sha256"]:
+        raise ValueError(f"{manifest['payload_key']} decompresses to an unexpected CSV")
+    return csv
 
 
 def remove_non_observation_values(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
@@ -441,39 +473,14 @@ def process_meteostat_to_silver(
 
         for year in years:
             current_task += 1
-            bronze_key = (
-                f"meteostat/station_hourly/year={year}/meteostat_station_{sid}_hourly_{year}.csv"
-            )
             start_window = f"{year}-01-01 00:00:00+00:00"
             end_window = f"{year + 1}-01-01 00:00:00+00:00"
 
-            # Read CSV from Bronze
+            # Read the CSV from Bronze, verified against its manifest
             try:
-                obj = client.get_object(BUCKET_BRONZE, bronze_key)
-                raw_bytes = obj.read()
-            except S3Error as s3_err:
-                if is_s3_not_found_error(s3_err):
-                    print(
-                        f"  [{current_task}/{total_tasks}] Year {year}: Bronze file not found (station had no 404 hourly data)"
-                    )
-                    continue
-                else:
-                    print(
-                        f"  [{current_task}/{total_tasks}] Year {year}: MinIO S3Error reading {bronze_key}: {s3_err}"
-                    )
-                    overall_dq["failures"].append(
-                        {
-                            "station_id": sid,
-                            "year": year,
-                            "stage": "read_bronze_s3",
-                            "error": str(s3_err),
-                        }
-                    )
-                    continue
+                raw_bytes = read_bronze_csv(client, sid, year)
             except Exception as e:
-                print(
-                    f"  [{current_task}/{total_tasks}] Year {year}: Unexpected error reading Bronze: {e}"
-                )
+                print(f"  [{current_task}/{total_tasks}] Year {year}: Bronze not usable: {e}")
                 overall_dq["failures"].append(
                     {
                         "station_id": sid,
@@ -481,6 +488,12 @@ def process_meteostat_to_silver(
                         "stage": "read_bronze",
                         "error": str(e),
                     }
+                )
+                continue
+            if raw_bytes is None:
+                print(
+                    f"  [{current_task}/{total_tasks}] Year {year}: no data in the archive "
+                    "(HTTP 404 recorded in the manifest)"
                 )
                 continue
 

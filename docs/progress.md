@@ -1215,3 +1215,33 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
   - A failed pipeline run leaving the watermark unchanged is covered by the trigger rule and the DAG test, not by a live failure. The Airflow behaviour itself (a failed task stops its downstream tasks) was shown live in the ID 17 and ID 32 failure runs.
   - The scope is closed at 2025, so after the first run each scheduled run is a no-op.
   - The lookback unit is a whole year.
+
+## Meteostat Bronze with manifests (ID 9) — 2026-10-23
+
+- Related work: workbook ID 9 (Meteostat/NOAA → Bronze); data contract "Target Bronze preserves original source bytes" and the audit gap of 2026-10-22 (Meteostat stored the decompressed CSV without a manifest and re-requested 25 HTTP-404 station-years on every run). The user asked that Bronze be replaced only if the data were identical and that the DW not change; and that a demo not depend on Meteostat being reachable.
+- Changes:
+  - `scripts/ingest_meteostat.py`:
+    - stores the received `.csv.gz` unchanged, plus a manifest per station-year (URL, HTTP status, retrieval time, upstream Last-Modified, SHA-256 and size of the received and of the decompressed bytes, line count);
+    - a 404 also gets a manifest, so reruns do not request it (`--recheck-missing` asks again);
+    - skips a station-year whose manifest and object size are current, without a request;
+    - a legacy decompressed `.csv` is removed only when the download decompresses to exactly its bytes; otherwise, or when the archive now answers 404, the legacy object is kept and the station-year fails (`--overwrite` to accept);
+    - a non-gzip body is never stored.
+  - `scripts/transform_meteostat_to_silver.py`: new `read_bronze_csv` reads Bronze through the manifest. The received bytes must match `sha256` and the decompressed CSV `csv_sha256`; a 404 manifest means no data; a missing manifest fails the station-year. Cleaning is unchanged.
+  - Tests: new `tests/test_ingest_meteostat.py` (9 tests):
+    - received bytes and manifest, rerun without a request;
+    - 404 recorded, not requested again, recheck;
+    - identical legacy replaced;
+    - legacy kept when the upstream differs or answers 404;
+    - batch counts;
+    - Silver verified read, changed object and missing manifest rejected, 404 skipped.
+
+    `tests/test_silver_transformations.py` and `tests/test_review_regressions.py` adapted to manifests (same assertions on the Silver output and failure handling).
+  - Docs: data contract (gap closed, Bronze rule), `docs/NAMING_CONVENTIONS.md` (Meteostat Bronze keys), `docs/architecture.md`, `docs/business-requirements.md` §6, `docs/development.md`, `scripts/AGENTS.md`, `README.md`.
+- Checks: `ruff check`, `ruff format`; `make test` → 241 passed, 22 deselected (one run before had 1 failure in the new test file: its fake `put_object` did not accept keyword arguments; fixed in the test); `make test-integration` → 22 passed.
+- Real data:
+  - Before changing anything, all 15 stored CSVs (48820 2016–2025, 48826 2021–2025) were compared with a fresh download: 15 of 15 decompressed to identical bytes (upstream Last-Modified 2026-04-26 and 2026-08-15, before the first download on 2026-10-21).
+  - Migration run `ingest_meteostat.py --start-year 2016 --end-year 2025` (35 s): 15 stored with the identical legacy CSV removed, 25 HTTP 404 recorded, 0 failures. Rerun (9 s): 15 skipped, 25 known 404 not requested, so no network request.
+  - `transform_meteostat_to_silver.py --start-year 2016 --end-year 2025 --overwrite` (17 s): 15 files, 120 monthly objects, 87,485 rows. All 120 Silver objects are byte-identical to a snapshot taken before the change.
+  - Offline check: the DAG's 13 commands for 2024 × HAN (4 ingestions, 4 transforms, gate, seed, Gold load, daily rain, reconcile) ran in a container on an internal Docker network with only MinIO and PostgreSQL attached. An HTTPS request from it failed (no internet), and every command exited 0: ingestions skipped by manifest, gate passed, reconcile passed. The temporary network was removed afterwards.
+  - DW fingerprint (observations, daily rain, predictions, `dim_model`) identical before and after.
+- Limits: the Bronze skip checks the object size against the manifest (as GHCNh does); the SHA-256 is checked when Silver reads the object. The offline check covered one year and one location; other stored years take the same skip paths.
