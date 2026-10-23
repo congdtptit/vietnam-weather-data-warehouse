@@ -1363,3 +1363,10 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
   - Same laptop and Docker as the original, not a second machine; the Airflow base image was not re-pulled.
   - The model was not retrained from today's labels: v1 comes from its release (see above).
   - The clean stack (containers, volumes `weather_clean_*`, image `weather-airflow-clean`, clone in the session scratchpad) is still present until the user agrees to remove it.
+
+## Workbook statuses after the final check of completed tasks — 2026-10-23
+
+- At the user's request, the tasks whose workbook output is met with recorded evidence, and which wait for no decision, were set to "Hoàn thành", 100: IDs 1, 2, 3, 4, 5, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 24, 25, 26, 31, 32, 34 (6 and 7 already were). Their notes were kept; only the phrase "chờ bạn xác nhận Hoàn thành" was removed. Notes that had become stale got a dated line: ID 2 Meteostat manifest done, IDs 5 and 14 gridded download stopped, ID 15 ERA5 loaded into the DW. Remaining limits were stated: ID 12 the ERA5 `update_frequency` seed value, ID 13 the fixed database name.
+- Not changed:
+  - IDs 9 (the GHCNh 300 mm rule waits for the team review), 21, 22, 23, 28, 29, 30, 36 (technically done, waiting for the N3 review checklist in `docs/rain-label.md`).
+  - IDs 20, 27, 33, 35 (Power BI, the teammate's .pbix) and 37–40 (report).
