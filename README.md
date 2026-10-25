@@ -8,7 +8,7 @@ README này dùng tiếng Việt theo yêu cầu của dự án. Code và tài l
 
 ## Trạng thái hiện tại
 
-Cập nhật ngày **2026-10-23**. Bằng chứng chi tiết (lệnh đã chạy, số dòng, thời gian chạy, hạn chế) nằm trong [nhật ký tiến độ](docs/progress.md). Đã có:
+Cập nhật ngày **2026-10-25**. Bằng chứng chi tiết (lệnh đã chạy, số dòng, thời gian chạy, hạn chế) nằm trong [nhật ký tiến độ](docs/progress.md). Đã có:
 
 - Docker Compose cho MinIO, PostgreSQL và Airflow (đã kiểm chứng webserver, scheduler và một lần chạy DAG kiểm tra ngày 22/10); Dockerfile Airflow 2.9.3/Python 3.10 với dependency được khóa phiên bản và checksum.
 - Khởi tạo bucket Bronze/Silver/Gold, DDL Star Schema và seed dimension; danh mục trạm đã xác minh trong `scripts/station_config.py`.
@@ -21,7 +21,7 @@ Cập nhật ngày **2026-10-23**. Bằng chứng chi tiết (lệnh đã chạy
 - Bronze Meteostat (task 9, từ 23/10) lưu nguyên file `.csv.gz` nhận về kèm manifest; ghi lại cả các năm không có dữ liệu (HTTP 404) nên lần sau không hỏi lại. Vì vậy DAG chạy lại các năm đã có dữ liệu không cần Internet (đã thử 23/10 trong container không có mạng: 13/13 bước thành công).
 - Gán trạm theo khoảng cách bằng GeoPandas (task 11, `scripts/assign_stations_geo.py`): tính khoảng cách trên hệ tọa độ UTM 48N, tìm trạm gần nhất trong 30 km và kiểm tra tỉnh của từng điểm. Kết quả khớp bảng trạm đang dùng và `dim_station` (chỉ đọc, không đổi DW).
 - Mưa ngày tại trạm từ NOAA GHCNh (5 trạm) → bảng riêng `fact_station_daily_rain`, kèm view so sánh với Open-Meteo.
-- View OLAP giờ/ngày/tháng/năm và độ phủ (`sql/02_olap_views.sql`); hướng dẫn dựng Power BI 8 trang (`docs/powerbi-dashboard-v1.md`, ngày 23/10 thêm mô tả chi tiết từng trang: biểu đồ, trường, số kiểm tra). File PBIX chưa có.
+- View OLAP giờ/ngày/tháng/năm và độ phủ (`sql/02_olap_views.sql`). Hai khối con tính trước (materialized view theo ngày và theo tháng, `sql/06_olap_cubes.sql`, ngày 25/10), được làm mới và đối chiếu với view sau mỗi lần nạp (`scripts/refresh_olap_cubes.py`, bước `refresh_olap_cubes` của DAG); đọc từ khối mất vài mili giây thay vì khoảng 1,3 giây. Notebook `notebooks/olap_demo.ipynb` chạy đủ 5 thao tác OLAP (roll-up, drill-down, slice, dice, pivot) và `GROUP BY CUBE` trên dữ liệu thật. Hướng dẫn dựng Power BI 8 trang (`docs/powerbi-dashboard-v1.md`, ngày 23/10 thêm mô tả chi tiết từng trang: biểu đồ, trường, số kiểm tra). File PBIX chưa có.
 - Nhãn RainNext24h (ngưỡng 1 mm, chia train/validation/test theo năm UTC, purge biên) xuất ra Gold ML; notebook EDA `notebooks/eda_rain_next24h.ipynb` với môi trường riêng (`make notebook-setup`); bộ 22 đặc trưng không rò rỉ dữ liệu tương lai trong `gold/ml_features/` (3 file theo tập train/validation/test); mô hình CART v1 đã train, chọn tham số trên validation 2024 và đánh giá một lần trên test 2025 (F1 0,777, Recall 0,792 với nhãn đã sửa lỗi làm tròn ngày 22/10; mốc dự báo theo hiện trạng F1 0,729); hình cây và luật trong `notebooks/cart_tree_rules.ipynb`; dự đoán test 2025 đã nạp vào `fact_weather_prediction` cùng `dim_model` và view `vw_prediction_vs_actual`.
 - So sánh ngưỡng và phân tích lỗi mô hình (task 36, `scripts/analyze_cart_thresholds.py`): ngưỡng chính thức 0,40 giữ nguyên; điểm ưu tiên Recall 0,36 chọn trên validation, số liệu trên test chỉ là phân tích làm sau.
 - DAG chấm điểm dự báo `weather_rain_scoring_dag` (task 32): tính lại đặc trưng từ Silver cho một khoảng ngày của tập test 2025, chấm điểm bằng CART v1 đã đóng băng (kiểm tra SHA-256 với `dim_model`), ghi dự báo vào Gold rồi vào DW (dòng không đổi thì không ghi lại), sau đó đối chiếu DW với Gold. Chạy thật cả năm 2025 ngày 23/10: 69.888 dự báo, DW không thay đổi.
@@ -29,7 +29,7 @@ Cập nhật ngày **2026-10-23**. Bằng chứng chi tiết (lệnh đã chạy
 - Ruff, pre-commit, Makefile, pytest và cấu hình GitHub Actions; tài liệu nghiệp vụ và đặc tả task tuần 2–5.
 - Đợt rà soát ngày 22/10 đã sửa: các script ML không còn ghi đè model, nhãn hay đặc trưng đã có; tải Open-Meteo và bước Silver báo lỗi (mã thoát 1) khi thiếu file; loader DW xóa dữ liệu theo phạm vi được yêu cầu, không theo dữ liệu đến; trạm 48820 được ghi đúng là sân bay Nội Bài (cách điểm HAN 22 km); migration `05_metadata_corrections.sql` thêm `pressure_type`, vai trò và khoảng cách trạm, cùng phiên bản nhãn dùng cho chỉ số test trong `dim_model`; DAX đếm ngày mưa/nóng trong hướng dẫn Power BI trả về 0 thay vì trống. Các việc cần nhóm quyết định nằm ở [business requirements §5a](docs/business-requirements.md#5a-proposals-awaiting-team-decision-2026-10-22).
 
-Dữ liệu thực 2016–2025 đã được dựng lại trên một máy cục bộ ngày 2026-10-21: DW có 788.861 dòng quan sát giờ (Open-Meteo 8 vị trí; Meteostat chỉ Hà Nội và không có mưa), 17.866 dòng mưa ngày GHCNh, 700.800 nhãn dùng được. Từ 23/10 DW có thêm ERA5 (8 vị trí, 701.376 dòng), tổng 1.490.237 dòng quan sát giờ. Lần kiểm tra gần nhất (23/10): `make test` 260 test đạt, `make test-integration` 22 test đạt.
+Dữ liệu thực 2016–2025 đã được dựng lại trên một máy cục bộ ngày 2026-10-21: DW có 788.861 dòng quan sát giờ (Open-Meteo 8 vị trí; Meteostat chỉ Hà Nội và không có mưa), 17.866 dòng mưa ngày GHCNh, 700.800 nhãn dùng được. Từ 23/10 DW có thêm ERA5 (8 vị trí, 701.376 dòng), tổng 1.490.237 dòng quan sát giờ. Lần kiểm tra gần nhất (25/10): `make test` 264 test đạt, `make test-integration` 24 test đạt.
 
 **Chưa hoàn chỉnh**: dashboard Power BI (task 20, 27), trang dự báo (task 33) và đối chiếu dashboard với SQL (task 35), do bạn trong nhóm làm từ gói dữ liệu đã gửi ngày 23/10; báo cáo, slide và kịch bản demo (task 37–40). Model v1 chọn ngưỡng theo F1 (0,40 là kết quả test chính thức); điểm ưu tiên Recall 0,36 là phương án bổ sung (N3 đã duyệt 8 mục quyết định ML ngày 23/10). Nhãn và đặc trưng dựa trên dữ liệu tái phân tích, chưa phải số đo trạm. Trạng thái nghiệm thu từng task do bảng phân công quản lý, không suy ra từ việc có file.
 
@@ -200,6 +200,8 @@ Test_DL_weather/
 │   ├── pipeline_watermark.py      # Mốc watermark của DAG tăng dần (task 25)
 │   ├── analyze_cart_thresholds.py # So sánh ngưỡng, phân tích lỗi (task 36)
 │   ├── benchmark_dw_queries.py    # Đo thời gian truy vấn DW (task 26)
+│   ├── refresh_olap_cubes.py      # Làm mới và kiểm tra hai khối con tính trước
+│   ├── olap_queries.py            # 5 thao tác OLAP và GROUP BY CUBE (notebook OLAP)
 │   ├── score_cart.py, publish_predictions.py  # Chấm điểm dự báo, đăng lên DW (task 32)
 │   └── load_predictions.py        # Đăng ký model và dự đoán test vào DW (task 31)
 ├── sql/                           # Khởi tạo DW và hướng dẫn SQL
@@ -208,8 +210,9 @@ Test_DL_weather/
 │   ├── 02_olap_views.sql
 │   ├── 03_station_daily_rain.sql
 │   ├── 04_predictions.sql
-│   └── 05_metadata_corrections.sql
-├── notebooks/                     # Notebook EDA, cây và luật CART
+│   ├── 05_metadata_corrections.sql
+│   └── 06_olap_cubes.sql          # Hai khối con tính trước (materialized view)
+├── notebooks/                     # Notebook EDA, cây và luật CART, trình diễn OLAP
 ├── tests/                         # Test offline/integration và fixture
 ├── plugins/                       # Thư mục plugin Airflow
 ├── config/                        # Cấu hình Airflow bổ sung

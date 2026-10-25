@@ -22,7 +22,7 @@ docker compose up -d --no-build
 docker compose ps           # postgres healthy; minio-init and airflow-init exited with 0
 ```
 
-Initialization creates the `bronze`, `silver`, and `gold` buckets and the `weather_dwh` schema, applying migrations `02`–`05`. It also seeds `dim_location` (8 rows), `dim_source` (5), and `dim_time` (24), and creates the Airflow user `admin`. Airflow is at <http://localhost:8080>. `weather_incremental_dag` starts paused.
+Initialization creates the `bronze`, `silver`, and `gold` buckets and the `weather_dwh` schema, applying migrations `02`–`06`. It also seeds `dim_location` (8 rows), `dim_source` (5), and `dim_time` (24), and creates the Airflow user `admin`. Airflow is at <http://localhost:8080>. `weather_incremental_dag` starts paused.
 
 To run one project script inside the Airflow image:
 
@@ -44,7 +44,7 @@ curl -u admin:admin -X POST -H 'Content-Type: application/json' \
   -d '{"conf": {"start_year": 2016, "end_year": 2025, "location": ""}}'
 ```
 
-Expected: 14/14 tasks, about 15 minutes.
+Expected: all tasks succeed in about 15 minutes. The verified run of 2026-10-23 had 14 tasks; since 2026-10-25 the DAG has a 15th, `refresh_olap_cubes`, which refreshes and checks the precomputed sub-cubes (about 5 s on the full data).
 
 - Downloads: Open-Meteo 80 files (349 s), GHCNh 50 (231 s), ERA5 8 point series (53 s), and Meteostat 15 files plus 25 station-years recorded as HTTP 404 (37 s).
 - The quality gate runs 1,032 checks with 0 failures.

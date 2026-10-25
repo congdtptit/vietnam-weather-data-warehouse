@@ -7,7 +7,8 @@ Each query runs under EXPLAIN (ANALYZE, BUFFERS) a few times; the report keeps t
 server execution time, the rows returned, the top plan node, whether a sort spilled to disk,
 and which indexes the plan used. Power BI imports the views (docs/powerbi-dashboard-v1.md),
 so the refresh queries read whole views; the check queries are the filtered SQL used to
-reconcile dashboard numbers (ID 35). Read-only: nothing in the DW changes.
+reconcile dashboard numbers (ID 35); the cube queries read the precomputed sub-cubes
+of sql/06_olap_cubes.sql. Read-only: nothing in the DW changes.
 
 Report (bucket gold): quality_reports/dw_query_benchmark_<timestamp>.json
 """
@@ -36,6 +37,14 @@ WORKLOAD = {
     "check hourly HAN Open-Meteo 2024-07-15": "SELECT * FROM vw_obs_hourly WHERE source_name = "
     "'Open-Meteo' AND location_code = 'HAN' AND local_date = '2024-07-15'",
     "check monthly ERA5 2024": "SELECT * FROM vw_obs_monthly WHERE source_name = 'ERA5' AND year = 2024",
+    # Precomputed sub-cubes (sql/06_olap_cubes.sql): the same questions read from storage
+    "cube read mv_obs_daily": "SELECT * FROM mv_obs_daily",
+    "cube read mv_obs_monthly": "SELECT * FROM mv_obs_monthly",
+    "cube check daily HAN Open-Meteo 2024": "SELECT sum(rain_mm), count(*) FILTER "
+    "(WHERE is_rainy_day) FROM mv_obs_daily WHERE source_name = 'Open-Meteo' "
+    "AND location_code = 'HAN' AND year = 2024",
+    "cube check monthly ERA5 2024": "SELECT * FROM mv_obs_monthly WHERE source_name = 'ERA5' "
+    "AND year = 2024",
 }
 
 

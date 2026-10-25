@@ -1,6 +1,6 @@
 # Weather Data Warehouse Schema
 
-Inventory 2026-10-08, based on `sql/init_dwh_schema.sql`; updated through 2026-10-22 with migrations `02`–`05`. Rows marked resolved or verified were checked against the live `weather_dwh` on the date given in [progress](progress.md). Distinguish existing DDL from proposals requiring migrations.
+Inventory 2026-10-08, based on `sql/init_dwh_schema.sql`; updated through 2026-10-25 with migrations `02`–`06`. Rows marked resolved or verified were checked against the live `weather_dwh` on the date given in [progress](progress.md). Distinguish existing DDL from proposals requiring migrations.
 
 ## Existing model
 
@@ -19,6 +19,8 @@ Diagram of the implemented schema (generated from the live catalog on 2026-10-22
 | `fact_station_daily_rain` (migration `sql/03_station_daily_rain.sql`) | PK `daily_rain_id`; UNIQUE `(source_key, station_key, rain_day_utc)`; FKs source/station/location; 24-hour gauge rain for `(D-1 12:00, D 12:00]` UTC; view `vw_rain_station_vs_model` |
 
 The DDL does not seed `dim_date`/`dim_station`. `dim_model` and the prediction keys come from `sql/04_predictions.sql` (extended by `sql/05_metadata_corrections.sql`), which also adds index `idx_fwo_location_source_ts` on the observation fact and view `vw_prediction_vs_actual` (prediction versus label-source rain over the same window; actual and outcome are NULL unless all 24 hours exist). OLAP views live in `sql/02_olap_views.sql` (applied by the initializer for new databases and manually for existing ones): `vw_obs_hourly`, `vw_obs_daily`, `vw_obs_monthly`, `vw_obs_yearly`, `vw_coverage`, and helper `vw_calendar_month`. Fact schema existence does not establish data population.
+
+Precomputed sub-cubes (`sql/06_olap_cubes.sql`, 2026-10-25): materialized views `mv_obs_daily` (source × location × local day, 62,118 rows) and `mv_obs_monthly` (source × location × local month, 2,057 rows) store the contents of `vw_obs_daily` and `vw_obs_monthly`, with unique indexes on their keys so they refresh `CONCURRENTLY` without blocking readers. `scripts/refresh_olap_cubes.py` refreshes both and fails unless each equals its view in both directions (`EXCEPT ALL`; the double-precision wind sums compared at 6 decimals, see below). It runs as task `refresh_olap_cubes` of `weather_bronze_to_dw_dag`, after `load_gold_observations` and before `reconcile`. A load run outside the DAG leaves the cubes stale until the script runs. The cuboid choice: the hourly fact is the base cuboid; the daily cube answers rainy/hot-day questions and is 24× smaller; the monthly cube answers trend and seasonal questions; yearly totals are computed from the monthly cube at query time. Power BI still imports the `vw_*` views, which are unchanged. The five OLAP operations and a `GROUP BY CUBE` query over these cubes are in `scripts/olap_queries.py` and `notebooks/olap_demo.ipynb`.
 
 ## Grain and keys
 
@@ -76,9 +78,21 @@ Workload and tool: `scripts/benchmark_dw_queries.py` runs the dashboard refresh 
 | Check: hourly HAN Open-Meteo 2024-07-15 | 0.4 ms (index `idx_fwo_location_source_ts`) | 24 |
 | Check: monthly ERA5 2024 | 1,176 ms | 96 |
 
+Precomputed sub-cubes, measured on 2026-10-25 with the same tool (report `gold/quality_reports/dw_query_benchmark_20261025T102754Z.json`; the view rows above were re-measured within 0.1 s):
+
+| Query | Median server time | Rows |
+| --- | --- | --- |
+| Read `mv_obs_daily` (same rows as `vw_obs_daily`, 1,301 ms) | 6.3 ms | 62,118 |
+| Read `mv_obs_monthly` (same rows as `vw_obs_monthly`, 1,287 ms) | 0.2 ms | 2,057 |
+| Check: daily HAN Open-Meteo 2024 from the cube (view: 436 ms) | 8.8 ms | 1 |
+| Check: monthly ERA5 2024 from the cube (view: 1,210 ms) | 0.3 ms | 96 |
+
+A refresh of both cubes takes about 4.4 s (3.1 s daily, 1.3 s monthly, `CONCURRENTLY`).
+
 All refresh queries together take about 5.8 s of server time. Findings:
 
 - The daily, monthly, and yearly views aggregate every fact row before any filter applies, so they scan the whole table; their cost is the scan and a sort that spills to disk at `work_mem` 4 MB.
 - Candidate indexes were created and measured inside a transaction that was rolled back (composite `(source_key, location_key, date_key)`, the unindexed foreign keys `time_key`, `station_key` (partial), `prediction_date_key`, `prediction_time_key`): the aggregate plans did not change (same times, still a full scan and sort); only the already index-backed hourly lookup moved from 0.5 to 0.4 ms. No index was kept, because it would slow the Gold load without helping the measured queries. The existing indexes (`idx_fwo_location_source_ts`, `idx_fwo_date`, `uq_weather_obs`, prediction indexes) already serve the selective lookups.
 - Session-level settings were also measured: `jit = off` saved about 0.3 s on `vw_prediction_vs_actual` and little elsewhere; `work_mem = 64MB` cut the daily and monthly views by about a quarter but slowed others in the same run. No server setting was changed.
-- Latency target (decided by the user on 2026-10-23): each view refresh under 5 s and each reconciliation query under 2 s on this machine. The measured maxima (1.3 s and 1.2 s) meet it. If later volumes need more, the next step is a materialized daily aggregate refreshed after each load, not more indexes.
+- Latency target (decided by the user on 2026-10-23): each view refresh under 5 s and each reconciliation query under 2 s on this machine. The measured maxima (1.3 s and 1.2 s) meet it. The materialized daily and monthly cubes of `sql/06_olap_cubes.sql` (2026-10-25) are that next step; they were added to meet the course requirement of precomputed sub-cubes, not because a target was missed.
+- Fingerprints: `vw_obs_daily` and the views built on it are not byte-stable between runs, because PostgreSQL may add the double-precision wind-direction sums (`wind_dir_sin_sum`, `wind_dir_cos_sum`) in a different order under parallel aggregation; measured 2026-10-25, three runs gave three md5 values for the full rows and one value with those two columns rounded to 6 decimals. Compare these columns rounded.

@@ -22,6 +22,7 @@ COPY sql/02_olap_views.sql ./sql/02_olap_views.sql
 COPY sql/03_station_daily_rain.sql ./sql/03_station_daily_rain.sql
 COPY sql/04_predictions.sql ./sql/04_predictions.sql
 COPY sql/05_metadata_corrections.sql ./sql/05_metadata_corrections.sql
+COPY sql/06_olap_cubes.sql ./sql/06_olap_cubes.sql
 COPY tests/ ./tests/
 COPY pyproject.toml ./pyproject.toml
 ENV WEATHER_TESTING=1 \

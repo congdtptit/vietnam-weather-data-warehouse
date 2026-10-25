@@ -9,7 +9,9 @@ fact_weather_observation; GHCNh daily station rain goes to fact_station_daily_ra
 Each task runs an existing script; a non-zero exit fails the task. Ingestion skips objects
 whose manifest and checksum are current, transforms rewrite Silver for the window,
 `quality_gate` (ID 24) stops the run before the DW when Silver breaks a contract rule, the Gold
-loaders replace the window in the DW, and `reconcile` fails when DW row counts differ from
+loaders replace the window in the DW, `refresh_olap_cubes` refreshes the precomputed daily and
+monthly sub-cubes (sql/06_olap_cubes.sql) and checks them against their views, and
+`reconcile` fails when DW row counts differ from
 Silver per source x location x year (hourly) or per station x year (daily rain). Only
 parameters and report keys pass between tasks.
 """
@@ -108,6 +110,10 @@ with DAG(
         task_id="load_station_daily_rain",
         bash_command=script("load_station_daily_rain.py", YEARS + LOCATION),
     )
+    cubes = BashOperator(
+        task_id="refresh_olap_cubes",
+        bash_command=script("refresh_olap_cubes.py", ""),
+    )
     reconcile = BashOperator(
         task_id="reconcile",
         bash_command=script("reconcile_dw.py", YEARS + LOCATION),
@@ -118,4 +124,6 @@ with DAG(
     ingest_ms >> silver_ms
     ingest_era5 >> silver_era5
     ingest_gh >> silver_gh
-    [silver_om, silver_ms, silver_era5, silver_gh] >> gate >> seed >> [load, load_rain] >> reconcile
+    [silver_om, silver_ms, silver_era5, silver_gh] >> gate >> seed >> [load, load_rain]
+    load >> cubes >> reconcile
+    load_rain >> reconcile

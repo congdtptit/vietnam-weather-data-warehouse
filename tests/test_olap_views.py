@@ -178,3 +178,68 @@ def test_missing_rain_is_unknown_not_zero_and_sources_stay_separate(olap_cursor)
            WHERE source_name='Meteostat' AND location_code='HAN' AND year=2023""",
     )
     assert float(cov[1]) == 0.0 and float(cov[0]) == float(cov[2]) > 0
+
+
+def test_precomputed_cubes_equal_their_views_after_refresh(olap_cursor):
+    from refresh_olap_cubes import CUBES, compare
+
+    cur = olap_cursor
+    cur.execute((ROOT / "sql/06_olap_cubes.sql").read_text())
+    cur.execute((ROOT / "sql/06_olap_cubes.sql").read_text())  # idempotent rerun
+    for cube in CUBES:
+        cur.execute(f"REFRESH MATERIALIZED VIEW CONCURRENTLY {cube}")
+    for cube, view in CUBES.items():
+        result = compare(cur, cube, view)
+        assert result["only_in_view"] == result["only_in_cube"] == 0, (cube, result)
+
+    # A new load makes the cubes stale until they are refreshed
+    _insert_local_day(cur, "Open-Meteo", 3, range(24), rain=lambda h: 0.1, temp=lambda h: 20.0)
+    assert compare(cur, "mv_obs_daily", "vw_obs_daily")["only_in_view"] == 1
+    assert compare(cur, "mv_obs_monthly", "vw_obs_monthly")["only_in_view"] == 1
+    for cube in CUBES:
+        cur.execute(f"REFRESH MATERIALIZED VIEW CONCURRENTLY {cube}")
+    for cube, view in CUBES.items():
+        result = compare(cur, cube, view)
+        assert result["only_in_view"] == result["only_in_cube"] == 0, (cube, result)
+
+    rain, rainy = _one(
+        cur,
+        """SELECT rain_mm, rainy_days FROM mv_obs_monthly
+           WHERE source_name='Open-Meteo' AND location_code='HAN' AND year_month=202303""",
+    )
+    assert float(rain) == pytest.approx(1.2 + 4.6 + 2.4) and rainy == 2
+
+
+def test_olap_operations_on_the_cubes(olap_cursor, pg_connection):
+    import olap_queries as oq
+
+    cur = olap_cursor
+    cur.execute((ROOT / "sql/06_olap_cubes.sql").read_text())
+    for cube in ("mv_obs_daily", "mv_obs_monthly"):
+        cur.execute(f"REFRESH MATERIALIZED VIEW {cube}")
+
+    # Roll-up: the quarter subtotal and the year total equal the month row (only March exists)
+    r = oq.roll_up(pg_connection, "Open-Meteo", "HAN", 2023).set_index("level")
+    assert list(r.index) == ["month", "quarter", "year"]
+    assert r["rain_mm"].nunique() == 1 and r.loc["year", "rain_mm"] == pytest.approx(5.8)
+    assert r.loc["year", "rainy_days"] == 1 and r.loc["year", "complete_days"] == 1
+
+    # Drill-down: month -> two days -> 24 hours of day 1
+    days = oq.drill_down(pg_connection, "Open-Meteo", "HAN", 2023, 3)
+    assert len(days) == 2 and list(days["rain_valid_hours"]) == [24, 23]
+    hours = oq.drill_down(pg_connection, "Open-Meteo", "HAN", 2023, 3, 1)
+    assert len(hours) == 24 and hours["precipitation_mm"].sum() == pytest.approx(1.2)
+
+    # Slice on the year keeps sources in separate columns: Meteostat rain is not added
+    s = oq.slice_year(pg_connection, 2023).set_index("location_code")
+    assert s.loc["HAN", "rain_open_meteo_mm"] == pytest.approx(5.8)
+    assert s.loc["HAN", "temp_meteostat_c"] == pytest.approx(31.0)
+
+    # The month is incomplete, so the pivot of monthly means leaves it out
+    assert oq.pivot_monthly_rain(pg_connection, "Open-Meteo", (2023, 2023)).empty
+
+    # CUBE: one location x one season, the two subtotals, and the grand total
+    c = oq.cube_rainy_days(pg_connection, "Open-Meteo", (2023, 2023))
+    assert len(c) == 4 and set(c["location"]) == {"HAN", "(all 8)"}
+    assert set(c["season"]) == {"dry (11-4)", "(all)"}
+    assert (c["rainy_day_pct"] == 100.0).all() and (c["complete_days"] == 1).all()
