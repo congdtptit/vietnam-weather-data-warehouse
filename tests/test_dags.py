@@ -65,7 +65,8 @@ def test_pipeline_dag_order_and_settings(dag_bag):
     assert down["transform_open_meteo_to_silver"] == {"quality_gate"}
     assert down["transform_meteostat_to_silver"] == {"quality_gate"}
     assert down["seed_dimensions"] == {"load_gold_observations", "load_station_daily_rain"}
-    assert down["load_gold_observations"] == {"reconcile"}
+    assert down["load_gold_observations"] == {"refresh_olap_cubes"}
+    assert down["refresh_olap_cubes"] == {"reconcile"}
     assert down["reconcile"] == set()
     assert dag.get_task("ingest_open_meteo").retries == 1
     assert dag.get_task("load_gold_observations").retries == 0
@@ -109,7 +110,12 @@ def test_pipeline_rejects_windows_outside_scope(dag_bag, start, end):
 
 def test_every_dw_writing_task_waits_for_the_quality_gate(dag_bag):
     dag = dag_bag.dags["weather_bronze_to_dw_dag"]
-    for task_id in ("seed_dimensions", "load_gold_observations", "load_station_daily_rain"):
+    for task_id in (
+        "seed_dimensions",
+        "load_gold_observations",
+        "load_station_daily_rain",
+        "refresh_olap_cubes",
+    ):
         task = dag.get_task(task_id)
         assert "quality_gate" in task.get_flat_relative_ids(upstream=True)
         assert task.trigger_rule == "all_success"

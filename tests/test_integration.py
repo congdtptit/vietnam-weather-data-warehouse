@@ -44,6 +44,7 @@ def test_schema_and_seed_rerun(pg_connection):
         "03_station_daily_rain.sql",
         "04_predictions.sql",
         "05_metadata_corrections.sql",
+        "06_olap_cubes.sql",
     ]
     with pg_connection, pg_connection.cursor() as cursor:
         for f in files:
