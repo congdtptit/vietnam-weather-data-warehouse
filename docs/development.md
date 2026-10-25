@@ -80,7 +80,7 @@ make precommit      # Run hooks on all tracked files
 
 Pre-commit also runs during `git commit`. If hooks change files, review the diff and stage again. Hooks use `.venv` Ruff, so run `make setup` per checkout. Makefile places pre-commit cache in `.venv/.cache/`. `make lint` checks untracked new files; hooks check them once staged.
 
-To start development services, create `.env` from `.env.example` if missing, then run `make up`. `make down` stops services and preserves volumes. Do not run integration tests against the development stack.
+To start development services, create `.env` from `.env.example` if missing, then run `make up`. `make down` stops services and preserves volumes. `make reproduce` rebuilds everything with one command ([reproduce from scratch](reproduce-from-scratch.md)); on a machine that holds the data it only verifies. Do not run integration tests against the development stack.
 
 ## Test suite and isolated environment
 

@@ -70,8 +70,10 @@ MODEL_UPSERT_SQL = """
     RETURNING model_key;
 """
 
+# A row is rewritten only when a value differs, so an unchanged rerun keeps `predicted_at`
+# (the same rule as scripts/publish_predictions.py).
 PREDICTION_UPSERT_SQL = """
-    INSERT INTO fact_weather_prediction (
+    INSERT INTO fact_weather_prediction AS p (
         prediction_date_key, prediction_time_key, target_date_key, location_key, model_name,
         model_version, rain_next_24h, rain_probability, model_key, origin_utc,
         target_start_utc, target_end_utc, horizon_hours, probability_threshold,
@@ -90,7 +92,15 @@ PREDICTION_UPSERT_SQL = """
         horizon_hours = EXCLUDED.horizon_hours,
         probability_threshold = EXCLUDED.probability_threshold,
         evaluation_split = EXCLUDED.evaluation_split,
-        predicted_at = CURRENT_TIMESTAMP;
+        predicted_at = CURRENT_TIMESTAMP
+    WHERE (p.prediction_date_key, p.prediction_time_key, p.target_date_key, p.model_name,
+           p.model_version, p.rain_next_24h, p.rain_probability, p.target_start_utc,
+           p.target_end_utc, p.horizon_hours, p.probability_threshold, p.evaluation_split)
+        IS DISTINCT FROM
+          (EXCLUDED.prediction_date_key, EXCLUDED.prediction_time_key, EXCLUDED.target_date_key,
+           EXCLUDED.model_name, EXCLUDED.model_version, EXCLUDED.rain_next_24h,
+           EXCLUDED.rain_probability, EXCLUDED.target_start_utc, EXCLUDED.target_end_utc,
+           EXCLUDED.horizon_hours, EXCLUDED.probability_threshold, EXCLUDED.evaluation_split);
 """
 
 RETRACT_SQL = """

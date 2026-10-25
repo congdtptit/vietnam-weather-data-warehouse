@@ -56,6 +56,16 @@ def refuse_overwrite(client: Minio, keys: list[str], overwrite: bool = False) ->
         )
 
 
+def already_published(client: Minio, manifest_key: str) -> bool:
+    """True when a dataset's manifest exists, so `--skip-existing` can leave the dataset as it is.
+
+    Every Gold ML writer puts its manifest last, after the data objects, so the manifest marks a
+    completed write. Data objects without a manifest are a partial write; `refuse_overwrite`
+    still stops them.
+    """
+    return object_exists(client, manifest_key)
+
+
 def labels_keys(version: str = DATASET_VERSION) -> tuple[str, str]:
     base = f"ml_labels/rain_next24h_labels_{version}"
     return f"{base}.parquet", f"{base}.json"
@@ -136,9 +146,13 @@ def export_labels(
     version: str = DATASET_VERSION,
     client: Minio | None = None,
     overwrite: bool = False,
+    skip_existing: bool = False,
 ) -> dict[str, Any]:
     client = client or get_minio_client()
     parquet_key, manifest_key = labels_keys(version)
+    if skip_existing and not overwrite and already_published(client, manifest_key):
+        print(f"[=] {BUCKET_GOLD}/{manifest_key} already exists; nothing written (--skip-existing)")
+        return {}
     refuse_overwrite(client, [parquet_key, manifest_key], overwrite)
     hourly = read_open_meteo_silver(client, start_year, end_year)
     labels = assign_splits(build_rain_labels(hourly, threshold_mm=threshold_mm))
@@ -189,6 +203,11 @@ def main() -> int:
     parser.add_argument(
         "--overwrite", action="store_true", help="Replace an existing dataset of this version"
     )
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Exit 0 without writing when the whole dataset of this version exists",
+    )
     args = parser.parse_args()
     try:
         export_labels(
@@ -197,6 +216,7 @@ def main() -> int:
             args.threshold_mm,
             args.version,
             overwrite=args.overwrite,
+            skip_existing=args.skip_existing,
         )
     except (RuntimeError, ValueError) as ex:
         print(f"[!] {ex}")

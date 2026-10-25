@@ -42,7 +42,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from export_rain_labels import refuse_overwrite
+from export_rain_labels import already_published, refuse_overwrite
 from load_gold_observations import BUCKET_GOLD, get_db_connection, get_minio_client
 from minio import Minio
 from train_cart import _get
@@ -167,13 +167,18 @@ def build(
     overwrite: bool = False,
     client: Minio | None = None,
     conn=None,
+    skip_existing: bool = False,
 ) -> dict[str, Any]:
     if not 2016 <= start_year <= end_year <= 2025:
         raise ValueError(f"window {start_year}-{end_year} is outside 2016-2025 or reversed")
     client = client or get_minio_client()
     years = range(start_year, end_year + 1)
     manifest_key = pivot_keys(start_year, version)[1]
-    refuse_overwrite(client, [*(pivot_keys(y, version)[0] for y in years), manifest_key], overwrite)
+    keys = [*(pivot_keys(y, version)[0] for y in years), manifest_key]
+    if skip_existing and not overwrite and already_published(client, manifest_key):
+        print(f"[=] {BUCKET_GOLD}/{manifest_key} already exists; nothing written (--skip-existing)")
+        return {}
+    refuse_overwrite(client, keys, overwrite)
 
     own = conn is None
     conn = conn or get_db_connection()
@@ -262,9 +267,20 @@ def main() -> int:
     parser.add_argument("--end-year", type=int, required=True)
     parser.add_argument("--version", default=PIVOT_VERSION)
     parser.add_argument("--overwrite", action="store_true", help="Replace an existing version")
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Exit 0 without writing when the whole pivot of this version exists",
+    )
     args = parser.parse_args()
     try:
-        build(args.start_year, args.end_year, args.version, args.overwrite)
+        build(
+            args.start_year,
+            args.end_year,
+            args.version,
+            args.overwrite,
+            skip_existing=args.skip_existing,
+        )
     except KeyboardInterrupt:
         print("\n[!] Interrupted by user.")
         return 130

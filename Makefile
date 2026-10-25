@@ -6,7 +6,7 @@ TEST_IMAGE := weather-tests:2.9.3-python3.10
 TEST_PROJECT ?= weather-tests
 TEST_COMPOSE := docker compose --env-file /dev/null -p $(TEST_PROJECT) -f docker-compose.test.yml
 
-.PHONY: help setup hooks lint format precommit config-check build test-build test test-integration check up down notebook-setup notebook-run
+.PHONY: help setup hooks lint format precommit config-check build test-build test test-integration check up down reproduce notebook-setup notebook-run
 
 help:
 	@echo "setup            Create tooling venv (Python >=3.10)"
@@ -19,6 +19,7 @@ help:
 	@echo "test-integration Run disposable MinIO/PostgreSQL tests, then clean up"
 	@echo "check            Run lint and both test suites"
 	@echo "up / down        Start / stop development services (preserve volumes)"
+	@echo "reproduce        Rebuild everything with one command (docs/reproduce-from-scratch.md)"
 	@echo "notebook-setup   Create .venv-notebook from requirements-notebook.txt"
 	@echo "notebook-run     Execute notebooks/eda_rain_next24h.ipynb in place (needs MinIO data)"
 
@@ -65,6 +66,17 @@ up:
 
 down:
 	docker compose down
+
+START_YEAR ?= 2016
+END_YEAR ?= 2025
+MODEL_RELEASE ?= outputs/model_release_cart_v1
+DRY_RUN ?= 0
+
+# Stack -> pipeline DAG -> labels/features -> model v1 and predictions -> scoring DAG -> checks.
+# Idempotent: a rerun on a machine that holds the data downloads nothing and changes nothing.
+reproduce:
+	START_YEAR=$(START_YEAR) END_YEAR=$(END_YEAR) MODEL_RELEASE=$(MODEL_RELEASE) DRY_RUN=$(DRY_RUN) \
+		bash scripts/reproduce.sh
 
 NOTEBOOK_VENV := .venv-notebook/bin
 

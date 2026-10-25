@@ -151,3 +151,11 @@ def test_dw_mismatch_fails_before_anything_is_written():
 def test_window_outside_scope_is_refused():
     with pytest.raises(ValueError, match="outside"):
         bp.build(2025, 2026, client=Mock(), conn=Mock())
+
+
+def test_skip_existing_returns_before_reading_the_dw():
+    store = _gold_store()
+    bp.build(2024, 2024, client=_client(store), conn=_conn(DW_OK))
+    saved, conn = dict(store), _conn(DW_OK)
+    assert bp.build(2024, 2024, client=_client(store), conn=conn, skip_existing=True) == {}
+    assert store == saved and not conn.cursor.called

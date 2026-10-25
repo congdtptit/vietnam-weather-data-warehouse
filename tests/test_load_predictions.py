@@ -192,9 +192,14 @@ def test_load_is_idempotent_and_retracts_missing_rows(pred_db):
     conn, cur = pred_db
     first = load_predictions(_NoCommit(conn), REPORT, EVALUATION, PREDS)
     assert first["rows_upserted"] == 4 and _count(cur) == 4
+    cur.execute("SELECT ctid::text FROM fact_weather_prediction ORDER BY prediction_id")
+    versions = cur.fetchall()
 
     again = load_predictions(_NoCommit(conn), REPORT, EVALUATION, PREDS)
     assert again["model_key"] == first["model_key"] and _count(cur) == 4
+    # Identical rows are not rewritten (an UPDATE would move them to a new tuple)
+    cur.execute("SELECT ctid::text FROM fact_weather_prediction ORDER BY prediction_id")
+    assert cur.fetchall() == versions
     cur.execute("SELECT count(*) FROM dim_model")
     assert cur.fetchone()[0] == 1
 
