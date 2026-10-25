@@ -33,7 +33,13 @@ from typing import Any
 
 import pandas as pd
 from export_rain_labels import DATASET_VERSION as LABEL_DATASET_VERSION
-from export_rain_labels import LABEL_SOURCE, labels_keys, read_open_meteo_silver, refuse_overwrite
+from export_rain_labels import (
+    LABEL_SOURCE,
+    already_published,
+    labels_keys,
+    read_open_meteo_silver,
+    refuse_overwrite,
+)
 from load_gold_observations import BUCKET_GOLD, get_minio_client
 from minio import Minio
 from rain_labels import LABEL_VERSION, SPLITS, round_rain
@@ -219,10 +225,15 @@ def export_features(
     label_dataset_version: str = LABEL_DATASET_VERSION,
     client: Minio | None = None,
     overwrite: bool = False,
+    skip_existing: bool = False,
 ) -> dict[str, Any]:
     client = client or get_minio_client()
     split_keys, manifest_key = features_keys(version)
-    refuse_overwrite(client, [*split_keys.values(), manifest_key], overwrite)
+    keys = [*split_keys.values(), manifest_key]
+    if skip_existing and not overwrite and already_published(client, manifest_key):
+        print(f"[=] {BUCKET_GOLD}/{manifest_key} already exists; nothing written (--skip-existing)")
+        return {}
+    refuse_overwrite(client, keys, overwrite)
     labels = read_labels(client, label_dataset_version)
     first = pd.Timestamp(year=start_year, month=1, day=1, tz="UTC")
     after = pd.Timestamp(year=end_year + 1, month=1, day=1, tz="UTC")
@@ -292,6 +303,11 @@ def main() -> int:
     parser.add_argument(
         "--overwrite", action="store_true", help="Replace an existing dataset of this version"
     )
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Exit 0 without writing when the whole dataset of this version exists",
+    )
     args = parser.parse_args()
     try:
         export_features(
@@ -300,6 +316,7 @@ def main() -> int:
             args.version,
             args.label_version,
             overwrite=args.overwrite,
+            skip_existing=args.skip_existing,
         )
     except (RuntimeError, ValueError) as ex:
         print(f"[!] {ex}")

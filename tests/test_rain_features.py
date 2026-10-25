@@ -199,3 +199,15 @@ def test_export_stamps_requested_version_and_refuses_overwrite():
 
     with pytest.raises(RuntimeError, match="already exist"):
         export_features(2024, 2024, version="vtest", client=client)
+
+
+def test_skip_existing_leaves_the_feature_dataset_unchanged():
+    import export_rain_labels as erl
+
+    store: dict[str, bytes] = {}
+    client = _client(store)
+    erl.export_labels(2024, 2024, client=client)
+    export_features(2024, 2024, version="vtest", client=client)
+    saved = dict(store)
+    assert export_features(2024, 2024, version="vtest", client=client, skip_existing=True) == {}
+    assert store == saved

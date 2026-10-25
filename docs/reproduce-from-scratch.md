@@ -2,6 +2,19 @@
 
 These are the steps that rebuilt the whole project from an empty data lake and an empty DW on 2026-10-23 (workbook ID 34). The run used a fresh clone of commit `18ae289` and, for the release steps, `6e87190`; the timings come from that run. Evidence and the comparison with the original machine are in [progress](progress.md).
 
+## One command
+
+Since 2026-10-25 the steps below run with one command (`scripts/reproduce.sh`):
+
+```bash
+cp .env.example .env        # fill CDSAPI_URL and CDSAPI_KEY
+make reproduce MODEL_RELEASE=/path/to/model_release_cart_v1
+```
+
+It builds and starts the stack, waits for Airflow, then runs sections 3–5 in order and stops at the first failure: boundaries, `weather_bronze_to_dw_dag` for 2016–2025 (it waits for the run), labels and features, the model release import, the test predictions, `weather_rain_scoring_dag` for 2025-01-01..2025-12-30, the Gold ML pivot, the station check, and a final check of the cubes and DW row counts. Options: `START_YEAR`/`END_YEAR` (default 2016/2025; a smaller window is for testing), `MODEL_RELEASE` (default `outputs/model_release_cart_v1`), `DRY_RUN=1` (print the steps only).
+
+Every step is idempotent, so a rerun on a machine that holds the data only verifies it: sources with current manifests are not downloaded, loads leave identical rows unchanged, the labels/features/pivot scripts skip a version whose manifest exists (`--skip-existing`), the release import skips identical objects, and `load_predictions.py` rewrites a prediction only when a value differs. Verified on 2026-10-25 on the existing stack with `START_YEAR=2025 END_YEAR=2025`: 290 s, the DAG ran 15/15 tasks, and the md5 fingerprints of every DW table were unchanged. A full run on fresh volumes with this command has not been done; the manual steps it automates were verified that way on 2026-10-23.
+
 ## 1. Prerequisites
 
 - Git, Docker Desktop or Engine with Compose v2, internet access, and about 10 GB of free disk.

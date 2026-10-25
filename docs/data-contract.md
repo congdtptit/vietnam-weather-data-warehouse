@@ -114,6 +114,20 @@ Do not merge different variables such as direct-normal irradiance and shortwave 
 - Validate keys, schema, UTC, duplicates, missing hours, and units before publication. Humidity/cloud percentages are in [0,100], rain/wind speed are nonnegative. Outlier and coverage limits are purpose-specific: the quality gate uses the warning thresholds in the decision table; other consumers (labels, BI) keep their own rules.
 - Resolve ERA5 accumulation resets/cycles for the actual product before deriving hourly rain. Reconcile equivalent intervals, locations, and measurements; related reanalysis sources are not independent confirmation.
 
+## Source licences
+
+Checked on 2026-10-25 on each provider's official page (the boundary row comes from the metadata stored in its Bronze manifest). Credit every source wherever its data or derived numbers are shown, link the licence, and say that the data were transformed (unit conversions, filtering, aggregation).
+
+| Source | Access used | Licence | Attribution and notes |
+| --- | --- | --- | --- |
+| Open-Meteo Historical Weather API | `archive-api.open-meteo.com/v1/archive` | CC BY 4.0 ([open-meteo.com/en/licence](https://open-meteo.com/en/licence)) | "Weather data by Open-Meteo.com", linked; the API itself is built on reanalysis data such as ERA5 |
+| ERA5 hourly time series on single levels (C3S/ECMWF) | CDS dataset `reanalysis-era5-single-levels-timeseries` | CC BY 4.0 (CDS catalogue entry, `license: CC-BY-4.0`); downloading requires accepting it in the CDS account | Cite the dataset, DOI [10.24381/1cf1ad76](https://doi.org/10.24381/1cf1ad76), and state that the results contain modified Copernicus Climate Change Service information |
+| Meteostat hourly bulk data | `data.meteostat.net/hourly/<year>/<station>.csv.gz` | CC BY 4.0 ([dev.meteostat.net/license](https://dev.meteostat.net/license)) | Credit Meteostat and its data providers (the kept values are station reports with source `isd_lite`, `metar`, `synop`, or `national`) |
+| NOAA GHCNh | `ncei.noaa.gov/oa/global-historical-climatology-network/hourly/access/` | Public NOAA data: the NCEI metadata gives use constraints (no warranty, the user is responsible for the use) and no restrictive licence; the AWS Open Data copy is published under CC0 1.0 | Cite Menne et al. (2023), Global Historical Climatology Network-Hourly (GHCNh), NOAA NCEI, DOI [10.25921/jp3d-3v19](https://doi.org/10.25921/jp3d-3v19); do not imply NOAA endorsement |
+| geoBoundaries VNM ADM1 | GitHub release commit `9469f09` | Public domain (`boundaryLicense`, licence source Wikimedia Commons) | Cite geoBoundaries (Runfola et al. 2020) |
+
+No source contains personal data.
+
 ## Contract changes
 
 Record version, changes, and unresolved decisions. Update affected adapters, DQ, Gold, loaders, and BI/ML consumers. Verify samples and duplicate-free reruns before claiming compliance. A draft is not approval of every proposal.

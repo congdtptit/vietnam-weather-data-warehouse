@@ -16,7 +16,7 @@ Cập nhật ngày **2026-10-25**. Bằng chứng chi tiết (lệnh đã chạy
 - Địa giới 63 tỉnh trước sáp nhập (GeoJSON, geoBoundaries) trong Bronze kèm manifest; bản 25 tỉnh miền Bắc trong Silver, đã kiểm tra 8 điểm nằm đúng tỉnh (`scripts/ingest_boundaries.py`).
 - Bronze Open-Meteo lưu nguyên bytes nhận về kèm manifest (SHA-256, độ phủ, tọa độ lưới) cho cả 80 file; ERA5 (NetCDF, Copernicus CDS): chuỗi theo giờ tại ô lưới gần nhất của 8 điểm, đủ 2016–2025, lưu nguyên bản kèm manifest (`scripts/ingest_era5_timeseries.py`), đã chuyển sang Silver (task 15, 701.376 dòng) và so sánh với Open-Meteo; ERA5 đã nạp vào DW từ 23/10 (701.376 dòng), DW tổng 1.490.237 dòng.
 - Bảng Gold ML gộp nguồn (task 16, `scripts/build_ml_pivot.py`): mỗi dòng là một điểm × một giờ UTC, mỗi nguồn (Open-Meteo, ERA5, Meteostat) có cột riêng cho 8 biến, không cộng gộp giữa các nguồn. 701.376 dòng cho 2016–2025, khớp Gold và DW theo từng nguồn và năm. Mô hình CART v1 không dùng bảng này.
-- Chạy lại toàn bộ trên môi trường sạch (task 34, ngày 23/10): clone repo mới, volume Docker trống, tải lại mọi nguồn rồi chạy hết pipeline (14/14 bước, khoảng 15 phút). DW, Silver và Gold khớp hoàn toàn với máy hiện tại. Lần chạy này tìm ra một lỗi và đã sửa: trên máy mới, lệnh huấn luyện mặc định có thể lưu một mô hình khác dưới tên v1. Giờ v1 được ghim mã SHA-256, và có gói phát hành mô hình (`scripts/model_release.py`) cho máy khác. Hướng dẫn: [docs/reproduce-from-scratch.md](docs/reproduce-from-scratch.md).
+- Chạy lại toàn bộ trên môi trường sạch (task 34, ngày 23/10): clone repo mới, volume Docker trống, tải lại mọi nguồn rồi chạy hết pipeline (14/14 bước, khoảng 15 phút). DW, Silver và Gold khớp hoàn toàn với máy hiện tại. Lần chạy này tìm ra một lỗi và đã sửa: trên máy mới, lệnh huấn luyện mặc định có thể lưu một mô hình khác dưới tên v1. Giờ v1 được ghim mã SHA-256, và có gói phát hành mô hình (`scripts/model_release.py`) cho máy khác. Hướng dẫn: [docs/reproduce-from-scratch.md](docs/reproduce-from-scratch.md). Từ 25/10 có lệnh `make reproduce` chạy toàn bộ các bước này bằng một lệnh; chạy lại trên máy đã có dữ liệu thì chỉ kiểm tra, không đổi dữ liệu (đã thử với năm 2025: 290 giây, kho không đổi).
 - Silver Open-Meteo (task 10, từ 23/10) lưu thêm tọa độ và độ cao ô lưới mà API trả về; báo lỗi nếu dữ liệu nhận về không ở múi giờ UTC (`utc_offset_seconds` khác 0). Cả 80 file đều đạt; các cột cũ không đổi.
 - Bronze Meteostat (task 9, từ 23/10) lưu nguyên file `.csv.gz` nhận về kèm manifest; ghi lại cả các năm không có dữ liệu (HTTP 404) nên lần sau không hỏi lại. Vì vậy DAG chạy lại các năm đã có dữ liệu không cần Internet (đã thử 23/10 trong container không có mạng: 13/13 bước thành công).
 - Gán trạm theo khoảng cách bằng GeoPandas (task 11, `scripts/assign_stations_geo.py`): tính khoảng cách trên hệ tọa độ UTM 48N, tìm trạm gần nhất trong 30 km và kiểm tra tỉnh của từng điểm. Kết quả khớp bảng trạm đang dùng và `dim_station` (chỉ đọc, không đổi DW).
@@ -29,7 +29,7 @@ Cập nhật ngày **2026-10-25**. Bằng chứng chi tiết (lệnh đã chạy
 - Ruff, pre-commit, Makefile, pytest và cấu hình GitHub Actions; tài liệu nghiệp vụ và đặc tả task tuần 2–5.
 - Đợt rà soát ngày 22/10 đã sửa: các script ML không còn ghi đè model, nhãn hay đặc trưng đã có; tải Open-Meteo và bước Silver báo lỗi (mã thoát 1) khi thiếu file; loader DW xóa dữ liệu theo phạm vi được yêu cầu, không theo dữ liệu đến; trạm 48820 được ghi đúng là sân bay Nội Bài (cách điểm HAN 22 km); migration `05_metadata_corrections.sql` thêm `pressure_type`, vai trò và khoảng cách trạm, cùng phiên bản nhãn dùng cho chỉ số test trong `dim_model`; DAX đếm ngày mưa/nóng trong hướng dẫn Power BI trả về 0 thay vì trống. Các việc cần nhóm quyết định nằm ở [business requirements §5a](docs/business-requirements.md#5a-proposals-awaiting-team-decision-2026-10-22).
 
-Dữ liệu thực 2016–2025 đã được dựng lại trên một máy cục bộ ngày 2026-10-21: DW có 788.861 dòng quan sát giờ (Open-Meteo 8 vị trí; Meteostat chỉ Hà Nội và không có mưa), 17.866 dòng mưa ngày GHCNh, 700.800 nhãn dùng được. Từ 23/10 DW có thêm ERA5 (8 vị trí, 701.376 dòng), tổng 1.490.237 dòng quan sát giờ. Lần kiểm tra gần nhất (25/10): `make test` 264 test đạt, `make test-integration` 24 test đạt.
+Dữ liệu thực 2016–2025 đã được dựng lại trên một máy cục bộ ngày 2026-10-21: DW có 788.861 dòng quan sát giờ (Open-Meteo 8 vị trí; Meteostat chỉ Hà Nội và không có mưa), 17.866 dòng mưa ngày GHCNh, 700.800 nhãn dùng được. Từ 23/10 DW có thêm ERA5 (8 vị trí, 701.376 dòng), tổng 1.490.237 dòng quan sát giờ. Lần kiểm tra gần nhất (25/10): `make test` 267 test đạt, `make test-integration` 24 test đạt.
 
 **Chưa hoàn chỉnh**: dashboard Power BI (task 20, 27), trang dự báo (task 33) và đối chiếu dashboard với SQL (task 35), do bạn trong nhóm làm từ gói dữ liệu đã gửi ngày 23/10; báo cáo, slide và kịch bản demo (task 37–40). Model v1 chọn ngưỡng theo F1 (0,40 là kết quả test chính thức); điểm ưu tiên Recall 0,36 là phương án bổ sung (N3 đã duyệt 8 mục quyết định ML ngày 23/10). Nhãn và đặc trưng dựa trên dữ liệu tái phân tích, chưa phải số đo trạm. Trạng thái nghiệm thu từng task do bảng phân công quản lý, không suy ra từ việc có file.
 
@@ -133,6 +133,7 @@ Các hạn chế về báo lỗi của service init và ingestion được ghi t
 | `make build` | Build image runtime Airflow |
 | `make up` | Build và khởi chạy stack phát triển |
 | `make down` | Dừng stack, giữ volume dữ liệu |
+| `make reproduce` | Dựng lại toàn bộ bằng một lệnh: stack, pipeline 2016–2025, nhãn, đặc trưng, mô hình v1 từ gói phát hành, dự báo, kiểm tra cuối ([hướng dẫn](docs/reproduce-from-scratch.md)) |
 
 Xem log khi cần:
 
@@ -201,6 +202,7 @@ Test_DL_weather/
 │   ├── analyze_cart_thresholds.py # So sánh ngưỡng, phân tích lỗi (task 36)
 │   ├── benchmark_dw_queries.py    # Đo thời gian truy vấn DW (task 26)
 │   ├── refresh_olap_cubes.py      # Làm mới và kiểm tra hai khối con tính trước
+│   ├── reproduce.sh               # Dựng lại toàn bộ bằng một lệnh (make reproduce)
 │   ├── olap_queries.py            # 5 thao tác OLAP và GROUP BY CUBE (notebook OLAP)
 │   ├── score_cart.py, publish_predictions.py  # Chấm điểm dự báo, đăng lên DW (task 32)
 │   └── load_predictions.py        # Đăng ký model và dự đoán test vào DW (task 31)

@@ -110,3 +110,18 @@ def test_export_refuses_to_overwrite_an_existing_version():
         erl.export_labels(2024, 2024, client=client)
     assert store[parquet_key] == saved
     erl.export_labels(2024, 2024, client=client, overwrite=True)
+
+
+def test_skip_existing_leaves_a_complete_dataset_and_still_refuses_a_partial_one():
+    import export_rain_labels as erl
+
+    client, store = _client()
+    erl.export_labels(2024, 2024, client=client)
+    parquet_key, manifest_key = erl.labels_keys()
+    saved = dict(store)
+    assert erl.export_labels(2024, 2024, client=client, skip_existing=True) == {}
+    assert store == saved
+
+    del store[manifest_key]  # a partly written dataset is not skipped
+    with pytest.raises(RuntimeError, match="already exist"):
+        erl.export_labels(2024, 2024, client=client, skip_existing=True)
