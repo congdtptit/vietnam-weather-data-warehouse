@@ -1420,3 +1420,12 @@ Proposed order: fix init/ingestion failure status with failure tests → resolve
 - Chapters 2–3 rebuilt the same day with one layout change: short tables now stay on one page (24 pages instead of 23); text and numbers unchanged.
 - Limits: chapter numbers assume chapter 1 is the introduction (ID 40). Workbook statuses of IDs 37–39 were not changed.
 - Next step: the user reviews chapter 4; ID 40 (introduction, conclusion, slides, demo script) remains.
+
+## Report chapters 1 and 5 drafted (ID 40, report part) — 2026-10-25
+
+- Related work: workbook ID 40 ("Mở đầu, kết luận, slide, tập demo"). The user made the slides; this entry covers the introduction and the conclusion only. The demo script and rehearsal are not done.
+- Artifacts (in `outputs/`, not in Git): `outputs/bao_cao/BaoCao_Chuong1-5_MoDau_KetLuan.docx` (7 pages) and its PDF; source `outputs/bao_cao/nguon/build_ch15.js`.
+- Content: chapter 1 gives the reasons, the general and the eight specific objectives (proposal §3), scope, the technology table with the pinned versions from `requirements.in`, the team roles from the workbook "Vai trò" sheet, the working method (Git, pull requests, Ruff, GitHub Actions, 259 unit and 22 integration tests, contracts, progress log), and the report structure. Chapter 5 maps the nine expected products of proposal §15 to results, then highlights, limits, lessons, and future work.
+- Placeholders (highlighted): member names (the repository uses member codes only), and the status of products 5 and 9 (Power BI), which waits for the teammate's `.pbix`.
+- Checks: every figure is taken from the chapters 2–4 sources and existing progress evidence; opened in Microsoft Word, exported to PDF, every page inspected.
+- Limits: workbook status of ID 40 not changed.
