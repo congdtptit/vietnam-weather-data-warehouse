@@ -1,5 +1,7 @@
 # Power BI Dashboard: Build Guide
 
+**Superseded as the delivered tool on 2026-10-27:** the user decided to replace Power BI with the web dashboard `dashboard/app.py` (Streamlit, `make dashboard`; see [business requirements §5a](business-requirements.md#5a-proposals-awaiting-team-decision-2026-10-22)). This guide stays the specification of the pages, measures, and reconciliation values (§4–§6); the web dashboard implements the same rules in `scripts/dashboard_queries.py`, and every value in §6 matched on 2026-10-27. The DAX below was never run in Power BI by this project.
+
 Version 0.3, 2026-10-23 (eight-page specification, new measures and calculated columns; 0.2: 2026-10-22, day-count DAX fix; 0.1: 2026-10-21). Workbook IDs 20, 27, 33, 35 (N2). Builds the dashboard on the OLAP views in `sql/02_olap_views.sql` (ID 19), the station view in `sql/03_station_daily_rain.sql` (ID 9), and the prediction view in `sql/04_predictions.sql` (ID 31). The v1 specification is in [task specifications §3](task-specs-weeks-2-5.md).
 
 This guide was written on macOS, where Power BI Desktop cannot run. **No `.pbix` exists yet.** The model, DAX, and reference numbers below were derived from the live DW; none of them has been tested inside Power BI Desktop. Record the actual build and the reconciliation results in [progress](progress.md).

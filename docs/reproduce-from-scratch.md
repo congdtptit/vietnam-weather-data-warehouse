@@ -96,7 +96,7 @@ run assign_stations_geo.py                                # GeoPandas station ch
 run benchmark_dw_queries.py                               # DW query timings (ID 26)
 ```
 
-Power BI connects to `localhost:5434`, database `weather_dwh` (see [Power BI v1](powerbi-dashboard-v1.md)).
+The web dashboard reads `localhost:5434`, database `weather_dwh`: run `make notebook-setup` once, then `make dashboard` (http://localhost:8501). It replaced Power BI on 2026-10-27; the page specification is [powerbi-dashboard-v1.md](powerbi-dashboard-v1.md).
 
 ## 6. Expected content
 

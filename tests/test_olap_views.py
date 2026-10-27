@@ -243,3 +243,63 @@ def test_olap_operations_on_the_cubes(olap_cursor, pg_connection):
     assert len(c) == 4 and set(c["location"]) == {"HAN", "(all 8)"}
     assert set(c["season"]) == {"dry (11-4)", "(all)"}
     assert (c["rainy_day_pct"] == 100.0).all() and (c["complete_days"] == 1).all()
+
+
+def test_dashboard_queries_on_the_warehouse(olap_cursor, pg_connection):
+    """Every query of the web dashboard runs on the warehouse schema and gives the cube values."""
+    from datetime import date
+
+    import dashboard_queries as dq
+
+    cur = olap_cursor
+    cur.execute((ROOT / "sql/06_olap_cubes.sql").read_text())
+    for cube in ("mv_obs_daily", "mv_obs_monthly"):
+        cur.execute(f"REFRESH MATERIALIZED VIEW {cube}")
+
+    monthly, sql = dq.monthly_rows(pg_connection, "Open-Meteo", ["HAN"], (2023, 2023), [3])
+    assert "mv_obs_monthly" in sql and "'Open-Meteo'" in sql
+    assert monthly["rain_mm"].iloc[0] == pytest.approx(5.8) and monthly["rainy_days"].iloc[0] == 1
+    hours, _ = dq.calendar_hours(pg_connection, (2023, 2023), [3])
+    assert hours["hours"].iloc[0] == 31 * 24
+    s = dq.summary(monthly, 1, float(hours["hours"].iloc[0]))
+    assert s["rain_mm"] == pytest.approx(5.8) and s["rain_coverage"] == pytest.approx(47 / 744)
+
+    meteostat, _ = dq.monthly_rows(pg_connection, "Meteostat", ["HAN"], (2023, 2023), [3])
+    ms = dq.summary(meteostat, 1, 744.0)
+    assert pd_isnan(ms["rain_mm"]) and pd_isnan(ms["rainy_days"]) and ms["hot_days"] == 0
+
+    years, _ = dq.trend_years(pg_connection, "Open-Meteo", "HAN")
+    assert years.set_index("year").loc[2023, "rain_mm"] == pytest.approx(5.8)
+    months, _ = dq.trend_months(pg_connection, "Open-Meteo", "HAN", 2023)
+    days, _ = dq.trend_days(pg_connection, "Open-Meteo", "HAN", 2023, 3)
+    hours_df, _ = dq.trend_hours(pg_connection, "Open-Meteo", "HAN", date(2023, 3, 1))
+    profile, _ = dq.hour_profile(pg_connection, "Open-Meteo", "HAN", (2023, 2023))
+    assert len(months) == 1 and len(days) == 2 and len(hours_df) == 24
+    assert days["rain_mm"].sum() == pytest.approx(months["rain_mm"].iloc[0])  # roll-up
+    assert profile["rain_mm"].sum() == pytest.approx(5.8)
+
+    by_source, _ = dq.source_months(pg_connection, "HAN", 2023)
+    assert set(by_source["source_name"]) == {"Open-Meteo", "Meteostat"}
+    dq.source_years(pg_connection, "HAN")
+    cov, _ = dq.coverage(pg_connection)
+    cov = dq.coverage_pct(cov).set_index(["source_name", "year"])
+    assert cov.loc[("Meteostat", 2023), "rain_pct"] == 0.0
+    counts, _ = dq.column_completeness(pg_connection)
+    missing = dq.column_missing_pct(counts).set_index("source_name")
+    assert missing.loc["Meteostat", "precipitation_mm"] == 100.0
+
+    stations, _ = dq.station_rows(pg_connection, (2023, 2023))
+    predictions, _ = dq.prediction_rows(pg_connection)
+    assert "model_rain_mm" in stations.columns and "outcome" in predictions.columns
+
+    sizes = dq.cube_sizes(pg_connection)[0].set_index("cube")
+    assert sizes.loc["mv_obs_monthly", "rows"] >= 2
+    view = dq.timed_monthly_query(pg_connection, "view", "Open-Meteo", "HAN", 2023)
+    cube = dq.timed_monthly_query(pg_connection, "cube", "Open-Meteo", "HAN", 2023)
+    assert view[0].equals(cube[0]) and "vw_obs_monthly" in view[1] and "mv_obs_monthly" in cube[1]
+    c, sql = dq.olap(pg_connection, "cube_rainy_days", "Open-Meteo", (2023, 2023))
+    assert len(c) == 4 and "CUBE" in sql
+
+
+def pd_isnan(value):
+    return value != value

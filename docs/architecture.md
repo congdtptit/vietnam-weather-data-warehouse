@@ -10,7 +10,7 @@ flowchart TD
     B --> S[Silver: normalized UTC, units, keys, and quality]
     S --> G[Gold: observations and separate feature datasets]
     G --> DW[PostgreSQL: dimensions and observation fact]
-    DW --> BI[Power BI: historical analysis and OLAP]
+    DW --> BI[Web dashboard (Streamlit): historical analysis and OLAP]
     G --> ML[CART: RainNext24h]
     ML --> P[DW: prediction fact and DimModel]
     P --> BI
@@ -37,7 +37,7 @@ Status as of 2026-10-22; [progress](progress.md) holds the commands, row counts,
 | DW | Dimensions, facts, loading, and OLAP | DDL, seeds, idempotent loaders, OLAP views (`sql/02_olap_views.sql`, `sql/03_station_daily_rain.sql`), two precomputed sub-cubes refreshed after each load (`sql/06_olap_cubes.sql`, `scripts/refresh_olap_cubes.py`), and the five OLAP operations plus `GROUP BY CUBE` in `notebooks/olap_demo.ipynb`; DAG `weather_bronze_to_dw_dag` (ID 17) runs Open-Meteo, Meteostat, and GHCNh Bronze → Silver → (Gold) → DW for an explicit window of years, stops before any DW write when the Silver quality gate fails (`scripts/quality_gate.py`, ID 24), and reconciles both facts with Silver (`scripts/reconcile_dw.py`); verified on 2016–2025; manual trigger. `weather_incremental_dag` (ID 25) runs daily, plans the next window of UTC years from a watermark (with a one-year lookback, never after 2025), triggers the pipeline DAG for it, and advances the watermark only after that run succeeds |
 | ML | CART, predictions in DW | RainNext24h labels, feature datasets v1 (used by model v1) and v2 (corrected labels, current), and CART model v1 (tuned on validation 2024, evaluated once on test 2025) in Gold ML, plus EDA and tree/rules notebooks; test 2025 predictions loaded into `fact_weather_prediction` with `dim_model` (`sql/04_predictions.sql`); scoring DAG `weather_rain_scoring_dag` (ID 32) recomputes features from Silver for a window of test origins, writes Gold predictions, and publishes them to the DW (unchanged rows untouched), then checks DW against Gold |
 | Reproduction | Rebuild from an empty data lake and DW | Verified on 2026-10-23 on fresh Docker volumes from a fresh clone (ID 34): every DW table and the Silver/Gold data matched the original machine. Steps in [reproduce from scratch](reproduce-from-scratch.md). Model v1 comes from its release bundle (`scripts/model_release.py`) |
-| BI | Power BI dashboards | Build guide `docs/powerbi-dashboard-v1.md`; no PBIX file |
+| BI | Dashboard over the DW | Web dashboard `dashboard/app.py` (Streamlit, `make dashboard`), replacing Power BI since 2026-10-27: the eight pages of `docs/powerbi-dashboard-v1.md` plus an OLAP page, read-only on the cubes and views, offline; queries and measures in `scripts/dashboard_queries.py`. Every reconciliation value of that guide (§6) matched on 2026-10-27. No PBIX file |
 
 ## Runtime and connections
 
