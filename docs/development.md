@@ -126,3 +126,11 @@ uv pip compile requirements-notebook.in --python-version 3.10 --universal --gene
 - `make notebook-setup` creates `.venv-notebook` (ignored by Git), installs the hashed lock, and registers the Jupyter kernel `weather-notebook`.
 - `make notebook-run` executes `notebooks/eda_rain_next24h.ipynb` in place; `make notebook-run NOTEBOOK=cart_tree_rules.ipynb` executes the CART tree and rules notebook (ID 30). It needs MinIO running with the Silver and Gold data described in `docs/progress.md`. Notebook logic lives in `scripts/` (for example `scripts/rain_eda.py`) and is unit-tested; notebooks only display results.
 - Verified on macOS x86_64 with Python 3.12.4. Other platforms were not tested.
+
+## Web dashboard
+
+`dashboard/app.py` is a Streamlit app over the running warehouse (it replaced Power BI on 2026-10-27). It uses the notebook environment: `requirements-notebook.in` pins `streamlit==1.39.0` and `plotly==5.24.1` (Streamlit 1.39 needs Pillow < 11, so the lock holds Pillow 10.4.0 and packaging 24.2).
+
+- `make dashboard` serves it on `http://localhost:8501` (`DASHBOARD_PORT=...` to change). It binds to localhost only, sends no usage statistics, and hides the deploy toolbar. It needs the Compose stack running; province outlines come from the Silver GeoJSON in MinIO and are drawn without map tiles, so it works offline.
+- The session is read-only (`set_session(readonly=True)`); every page shows the SQL it ran.
+- Logic lives in `scripts/dashboard_queries.py` and is unit-tested in `tests/test_dashboard_queries.py`; `tests/test_olap_views.py::test_dashboard_queries_on_the_warehouse` runs every query on the integration database. The Streamlit page code itself has no automated test; it was checked by loading every page in headless Chrome.

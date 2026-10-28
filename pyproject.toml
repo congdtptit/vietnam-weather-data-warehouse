@@ -10,6 +10,8 @@ select = ["E4", "E7", "E9", "F", "I"]
 # Existing Windows stdout setup precedes optional third-party imports.
 "scripts/init_minio.py" = ["E402"]
 "scripts/test_minio_upload.py" = ["E402"]
+# The dashboard adds scripts/ to sys.path before importing the query modules.
+"dashboard/app.py" = ["E402"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
