@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import math
 import time
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 import numpy as np
@@ -159,6 +159,8 @@ def trend_years(conn, source: str, location: str) -> tuple[pd.DataFrame, str]:
                sum(rain_mm) AS rain_mm,
                sum(rain_valid_hours) AS rain_valid_hours,
                round(sum(temp_sum) / NULLIF(sum(temp_valid_hours), 0), 2) AS temp_mean_c,
+               min(temp_min_c) AS temp_min_c,
+               max(temp_max_c) AS temp_max_c,
                CASE WHEN sum(complete_rain_days) > 0 THEN coalesce(sum(rainy_days), 0) END
                    AS rainy_days,
                CASE WHEN sum(complete_temp_days) > 0 THEN coalesce(sum(hot_days), 0) END
@@ -373,23 +375,14 @@ def summary(monthly: pd.DataFrame, n_locations: int, hours_per_location: float) 
 
     Rain and day counts are means per location per year; temperature is the mean of all valid
     hours; coverage divides by the expected hours of every selected location (the calendar
-    hours of the selected years and months), including locations without rows."""
-    if monthly.empty:
-        return {
-            k: math.nan
-            for k in (
-                "rain_mm",
-                "temp_mean_c",
-                "temp_min_c",
-                "temp_max_c",
-                "rainy_days",
-                "hot_days",
-                "rain_coverage",
-                "temp_coverage",
-            )
-        }
-    ly = location_year_totals(monthly)
+    hours of the selected years and months), including locations without rows, so a selection
+    without rows has a known coverage of 0 while its other measures are unknown."""
     expected = hours_per_location * n_locations
+    if monthly.empty:
+        unknown = ("rain_mm", "temp_mean_c", "temp_min_c", "temp_max_c", "rainy_days", "hot_days")
+        empty = _ratio(0.0, expected)
+        return {**{k: math.nan for k in unknown}, "rain_coverage": empty, "temp_coverage": empty}
+    ly = location_year_totals(monthly)
     return {
         "rain_mm": ly["rain_mm"].mean(),
         "temp_mean_c": _ratio(monthly["temp_sum"].sum(), monthly["temp_valid_hours"].sum()),
@@ -571,8 +564,11 @@ def boundary_lines(geojson: dict) -> tuple[list, list]:
 
 
 def vn_number(value: Any, decimals: int = 1, unit: str = "") -> str:
-    """Vietnamese number format (thousands '.', decimals ','); unknown values become a dash."""
+    """Vietnamese number format (thousands '.', decimals ','); unknown values become a dash.
+    Ties round away from zero, as SQL round() and the chart labels do (183.25 -> 183,3); the
+    shortest decimal form of the float is rounded, not its binary expansion."""
     if value is None or (not isinstance(value, str) and pd.isna(value)):
         return "—"
-    text = f"{float(value):,.{decimals}f}".replace(",", "\0").replace(".", ",").replace("\0", ".")
+    exact = Decimal(repr(float(value))).quantize(Decimal(1).scaleb(-decimals), ROUND_HALF_UP)
+    text = f"{exact:,.{decimals}f}".replace(",", "\0").replace(".", ",").replace("\0", ".")
     return f"{text} {unit}" if unit else text

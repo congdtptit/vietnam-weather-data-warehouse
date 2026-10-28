@@ -44,6 +44,9 @@ def test_vn_number_uses_vietnamese_separators_and_a_dash_for_unknown():
     assert dq.vn_number(1490237, 0) == "1.490.237"
     assert dq.vn_number(24.62, 2, "°C") == "24,62 °C"
     assert dq.vn_number(0.0) == "0,0"  # zero stays zero
+    # Ties round away from zero like SQL round() (1,466 rainy location-days / 8 = 183.25)
+    assert dq.vn_number(183.25) == "183,3" and dq.vn_number(2.675, 2) == "2,68"
+    assert dq.vn_number(-0.25) == "-0,3" and dq.vn_number(np.float64(0.25)) == "0,3"
     for unknown in (None, math.nan, np.nan, pd.NA):
         assert dq.vn_number(unknown) == "—"
 
@@ -84,6 +87,11 @@ def test_summary_keeps_unknown_rain_and_days_unknown():
     # A location without rows still counts in the coverage denominator
     s8 = dq.summary(_frame([_month("HAN", 2024, 1, 10.0, 1)]), 8, 720.0)
     assert s8["rain_coverage"] == pytest.approx(1 / 8)
+
+    # No rows at all (Meteostat at Phú Thọ): measures unknown, but coverage is a known 0
+    none = dq.summary(pd.DataFrame(), 1, 8784.0)
+    assert math.isnan(none["rain_mm"]) and math.isnan(none["hot_days"])
+    assert none["rain_coverage"] == 0.0 and none["temp_coverage"] == 0.0
 
 
 def test_day_counts_are_zero_inside_the_completeness_guard():

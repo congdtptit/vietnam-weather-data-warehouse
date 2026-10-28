@@ -47,6 +47,19 @@ BASIS = (
     "Lịch Việt Nam (UTC+7) · ngày mưa: đủ 24 giờ số liệu và tổng ≥ 1 mm · ngày nóng: đủ 24 giờ "
     "và cao nhất ≥ 35 °C · không bao giờ cộng các nguồn với nhau"
 )
+STATION_BASIS = (
+    "Ngày mưa của trạm là 24 giờ kết thúc lúc 12:00 UTC (19:00 giờ Việt Nam); năm và tháng "
+    "theo ngày UTC đó · ngày mưa: tổng ≥ 1 mm · mưa Open-Meteo chỉ tính ngày đủ 24 giờ · "
+    "không cộng mưa của các điểm với nhau"
+)
+FORECAST_BASIS = (
+    "Thời điểm dự báo, tháng và mùa theo giờ Việt Nam (UTC+7) · nhãn: tổng mưa Open-Meteo của "
+    "24 giờ sau thời điểm dự báo ≥ 1 mm, chỉ tính khi đủ 24 giờ số liệu"
+)
+QUALITY_BASIS = (
+    "Năm theo giờ Việt Nam (UTC+7) · độ phủ = số giờ có giá trị / số giờ phải có của năm · "
+    "thiếu là để trống, không ghi 0"
+)
 
 _LOCK = threading.Lock()
 
@@ -103,10 +116,12 @@ def names() -> dict[str, str]:
 # --- Display helpers ---------------------------------------------------------------------------
 
 
-def header(title: str, question: str, olap: str | None = None) -> None:
+def header(title: str, question: str, olap: str | None = None, basis: str = BASIS) -> None:
+    """Page title, its business question, and the counting basis (pages 7 and 8 state their
+    own, as the specification asks)."""
     st.title(title)
     st.markdown(f"**{question}**" + (f" · Thao tác OLAP: *{olap}*" if olap else ""))
-    st.caption(BASIS)
+    st.caption(basis)
 
 
 def sql_box(*queries: str) -> None:
@@ -148,6 +163,11 @@ def pct(value, decimals: int = 1) -> str:
     return dq.vn_number(None if pd.isna(value) else 100 * value, decimals, "%")
 
 
+def _total(values: pd.Series) -> float:
+    """Sum that stays unknown when every value is unknown."""
+    return values.sum(min_count=1)
+
+
 def table(df: pd.DataFrame) -> None:
     st.dataframe(df, hide_index=True, use_container_width=True)
 
@@ -168,7 +188,7 @@ def page_overview() -> None:
         "Slice",
     )
     codes = list(location_table()["location_code"])
-    c1, c2, c3 = st.columns([1, 3, 1])
+    c1, c2, c3, c4 = st.columns([1, 3, 1, 1])
     source = c1.selectbox("Nguồn dữ liệu", dq.SOURCES, key="ov_source")
     chosen = c2.multiselect(
         "Điểm nghiên cứu", codes, default=codes, format_func=names().get, key="ov_locations"
@@ -180,15 +200,27 @@ def page_overview() -> None:
         format_func=lambda y: "TB 2016–2025" if not y else str(y),
         key="ov_year",
     )
+    month = c4.selectbox(
+        "Tháng",
+        [0, *ALL_MONTHS],
+        format_func=lambda m: "Cả năm" if not m else f"Tháng {m}",
+        key="ov_month",
+    )
     if not chosen:
         st.info("Chọn ít nhất một điểm.")
         return
     years = dq.YEARS if not year else (year, year)
-    monthly, sql_monthly = cached("monthly_rows", source, tuple(chosen), years, ALL_MONTHS)
-    hours, sql_hours = cached("calendar_hours", years, ALL_MONTHS)
+    months = ALL_MONTHS if not month else (month,)
+    monthly, sql_monthly = cached("monthly_rows", source, tuple(chosen), years, months)
+    hours, sql_hours = cached("calendar_hours", years, months)
     hours_per_location = float(hours["hours"].iloc[0])
     s = dq.summary(monthly, len(chosen), hours_per_location)
     per = " mỗi năm" if not year else ""
+    st.caption(
+        f"Kỳ đang xem: {'cả năm' if not month else f'tháng {month}'}, "
+        f"{'trung bình mỗi năm 2016–2025' if not year else f'năm {year}'}, "
+        f"{len(chosen)} điểm, nguồn {source}."
+    )
 
     cards = st.columns(5)
     cards[0].metric(f"Lượng mưa TB/điểm{per}", num(s["rain_mm"], 1, "mm"))
@@ -261,7 +293,8 @@ def page_overview() -> None:
     month_axis(fig)
     headroom(fig, month["rain_mm"])
     left.plotly_chart(
-        style(fig, "Lượng mưa theo tháng (mm, TB mỗi điểm)", "mm"), use_container_width=True
+        style(fig, f"Lượng mưa theo tháng (mm, TB mỗi điểm{per})", "mm"),
+        use_container_width=True,
     )
     fig = go.Figure(
         go.Scatter(
@@ -320,6 +353,11 @@ def _drill(chart_key: str, level: str) -> None:
         _reset_below("month")
     elif level == "day":
         st.session_state.tr_day = value
+
+
+def _day_count(flag) -> float:
+    """A day's rainy or hot flag as a day count: 1, 0, or unknown for an incomplete day."""
+    return float("nan") if flag is None or pd.isna(flag) else float(bool(flag))
 
 
 def _roll_up() -> None:
@@ -405,8 +443,15 @@ def page_trends() -> None:
         )
         if p
     )
+    hint = ""
+    if level != "hour" and not data.empty:
+        hint = (
+            " Bấm vào một cột mưa để khoan xuống mức dưới."
+            if data[rain_col].notna().any()
+            else " Nguồn này không có số liệu mưa; dùng các ô Năm, Tháng, Ngày để khoan xuống."
+        )
     b1, b2 = st.columns([4, 1])
-    b1.markdown(f"Đang xem: **{path}**. Bấm vào một cột mưa để khoan xuống mức dưới.")
+    b1.markdown(f"Đang xem: **{path}**.{hint}")
     b2.button("⤴ Gộp lên một mức", on_click=_roll_up, disabled=not year, use_container_width=True)
 
     if data.empty:
@@ -449,20 +494,26 @@ def page_trends() -> None:
     with right:
         show(style(fig, "Nhiệt độ trung bình (°C)", "°C"))
 
+    # Each row comes from its own level of the cube (day and month cubes, the year from the
+    # monthly cube), so the check below compares two independent aggregates.
     rows = []
     if day:
+        days_df, _ = cached("trend_days", source, location, year, month)
+        d = days_df[days_df["day_of_month"] == day].iloc[0]
         rows.append(
             (
                 "Ngày",
                 f"{day}/{month}/{year}",
-                data[rain_col].sum(min_count=1),
-                data[temp_col].mean(),
-                None,
-                None,
+                d["rain_mm"],
+                d["temp_mean_c"],
+                d["temp_min_c"],
+                d["temp_max_c"],
+                _day_count(d["is_rainy_day"]),
+                _day_count(d["is_hot_day"]),
             )
         )
     if month:
-        months_df, sql = cached("trend_months", source, location, year)
+        months_df, _ = cached("trend_months", source, location, year)
         m = months_df[months_df["month"] == month].iloc[0]
         rows.append(
             (
@@ -470,6 +521,8 @@ def page_trends() -> None:
                 f"{month}/{year}",
                 m["rain_mm"],
                 m["temp_mean_c"],
+                m["temp_min_c"],
+                m["temp_max_c"],
                 m["rainy_days"],
                 m["hot_days"],
             )
@@ -477,7 +530,16 @@ def page_trends() -> None:
     if year:
         y = years_df[years_df["year"] == year].iloc[0]
         rows.append(
-            ("Năm", str(year), y["rain_mm"], y["temp_mean_c"], y["rainy_days"], y["hot_days"])
+            (
+                "Năm",
+                str(year),
+                y["rain_mm"],
+                y["temp_mean_c"],
+                y["temp_min_c"],
+                y["temp_max_c"],
+                y["rainy_days"],
+                y["hot_days"],
+            )
         )
     if rows:
         st.subheader("Roll-up: từ mức đang xem lên năm")
@@ -488,16 +550,22 @@ def page_trends() -> None:
                     "Thời gian": [r[1] for r in rows],
                     "Mưa (mm)": [num(r[2]) for r in rows],
                     "Nhiệt độ TB (°C)": [num(r[3], 2) for r in rows],
-                    "Ngày mưa": [num(r[4], 0) for r in rows],
-                    "Ngày nóng": [num(r[5], 0) for r in rows],
+                    "Thấp nhất (°C)": [num(r[4], 2) for r in rows],
+                    "Cao nhất (°C)": [num(r[5], 2) for r in rows],
+                    "Ngày mưa": [num(r[6], 0) for r in rows],
+                    "Ngày nóng": [num(r[7], 0) for r in rows],
                 }
             )
         )
-        parent = {"month": "năm", "day": "tháng", "hour": "ngày"}.get(level)
-        if parent:
+        parent = {"month": "Năm", "day": "Tháng", "hour": "Ngày"}.get(level)
+        total = data[rain_col].sum(min_count=1)
+        if parent and pd.notna(total):
+            expected = next(r[2] for r in rows if r[0] == parent)
+            same = pd.notna(expected) and abs(total - expected) < 1e-6
             st.caption(
-                f"Kiểm tra roll-up: tổng các cột của biểu đồ = "
-                f"{num(data[rain_col].sum(min_count=1))} mm, bằng dòng {parent} ở bảng trên."
+                f"Kiểm tra roll-up: tổng các cột của biểu đồ = {num(total)} mm; dòng "
+                f"{parent.lower()} ở bảng trên = {num(expected)} mm "
+                f"({'khớp' if same else 'không khớp'})."
             )
 
     profile_years = dq.YEARS if not year else (year, year)
@@ -699,9 +767,11 @@ def page_sources() -> None:
     show(style(fig, "Lượng mưa theo năm, 2016–2025 (mm)", "mm"))
 
     st.subheader(f"Đối chiếu từng nguồn: {names()[location]}, {year}")
+    # Calendar hours of the whole local year, so a source missing a month is not inflated
+    hours, sql_hours = cached("calendar_hours", (year, year), ALL_MONTHS)
+    expected = float(hours["hours"].iloc[0])
     rows = []
     for source, part in months_df.groupby("source_name"):
-        expected = (part["days_in_month"] * 24).sum()
         complete_rain, complete_temp = (
             part["complete_rain_days"].sum(),
             part["complete_temp_days"].sum(),
@@ -728,14 +798,18 @@ def page_sources() -> None:
         "hơn điểm thật nên nhiệt độ thấp hơn và áp suất không so được giữa các nguồn. "
         "Meteostat chỉ có Hà Nội (trạm sân bay Nội Bài) và không có số liệu mưa."
     )
-    sql_box(sql_months, sql_years)
+    sql_box(sql_months, sql_years, sql_hours)
 
 
 # --- 5. Data quality ---------------------------------------------------------------------------
 
 
 def page_quality() -> None:
-    header("Chất lượng dữ liệu", "Mỗi nguồn có đủ số liệu không; cột nào thiếu và vì sao?")
+    header(
+        "Chất lượng dữ liệu",
+        "Mỗi nguồn có đủ số liệu không; cột nào thiếu và vì sao?",
+        basis=QUALITY_BASIS,
+    )
     cov, sql_cov = cached("coverage")
     counts, sql_counts = cached("column_completeness")
     cov = dq.coverage_pct(cov)
@@ -774,7 +848,7 @@ def page_quality() -> None:
         )
     )
 
-    st.subheader("Tỉ lệ giá trị thiếu theo từng cột (2016–2025, mọi bản ghi trong kho)")
+    st.subheader("Tỉ lệ giá trị thiếu theo từng cột (mọi bản ghi trong kho, 2016–2025 theo UTC)")
     missing = dq.column_missing_pct(counts)
     labels = {
         "temperature_c": "Nhiệt độ",
@@ -794,10 +868,14 @@ def page_quality() -> None:
     table(shown)
     st.markdown(
         "- Thiếu là **để trống**, không ghi 0 và không nội suy.\n"
-        "- Meteostat chỉ có trạm 48820 (sân bay Nội Bài) cho Hà Nội. Mưa của Meteostat đều do "
-        "mô hình điền nên bị loại (thiếu 100%); mây thiếu vì trạm không báo.\n"
+        "- Meteostat chỉ có trạm 48820 (sân bay Nội Bài) cho Hà Nội. Mọi giá trị mưa của "
+        "Meteostat đều do mô hình điền nên đã bị loại (thiếu 100%). Mây: phần lớn giờ thiếu là "
+        "trạm không báo, khoảng một phần ba là giá trị do mô hình điền đã bị loại.\n"
         "- Bức xạ: ERA5 không tải biến này, Meteostat không có.\n"
-        "- Năm 2016 theo giờ Việt Nam thiếu 7 giờ đầu, vì số liệu bắt đầu từ 00:00 UTC."
+        "- Năm 2016 theo giờ Việt Nam thiếu 7 giờ đầu, vì số liệu bắt đầu từ 00:00 UTC.\n"
+        "- Bảng này đếm mọi bản ghi theo giờ UTC 2016–2025, nên nhiều hơn số giờ ở các thẻ "
+        "(đếm theo năm Việt Nam 2016–2025): 7 giờ đầu năm 2026 theo giờ Việt Nam ở mỗi điểm, "
+        "tức 56 bản ghi của Open-Meteo, 56 của ERA5 và 7 của Meteostat."
     )
     sql_box(sql_cov, sql_counts)
 
@@ -873,10 +951,11 @@ def page_map() -> None:
                 height=620,
             )
         )
-        st.caption(
-            "Ranh giới 25 tỉnh miền Bắc trước sáp nhập (geoBoundaries, tầng Silver), vẽ "
-            "không cần nền bản đồ trực tuyến."
-        )
+        if geo:
+            st.caption(
+                "Ranh giới 25 tỉnh miền Bắc trước sáp nhập (geoBoundaries, tầng Silver), vẽ "
+                "không cần nền bản đồ trực tuyến."
+            )
     with right:
         st.subheader("Số liệu theo điểm")
         table(
@@ -886,7 +965,7 @@ def page_map() -> None:
                     "Tỉnh": points["province"],
                     "Mưa (mm)": points["rain_mm"].map(num),
                     "Nhiệt độ TB (°C)": points["temp_mean_c"].map(lambda v: num(v, 2)),
-                    "Ngày mưa": points["rainy_days"].map(num),
+                    "Ngày mưa": points["rainy_days"].map(lambda v: num(v, 0 if year else 1)),
                     "Độ cao (m)": points["elevation_m"].map(lambda v: num(v, 0)),
                 }
             )
@@ -902,6 +981,7 @@ def page_stations() -> None:
         "Trạm đo và mô hình",
         "Mưa của Open-Meteo có khớp với trạm đo mặt đất không?",
         "Drill-down năm → tháng",
+        basis=STATION_BASIS,
     )
     c1, c2 = st.columns([1, 3])
     year = c1.selectbox(
@@ -913,20 +993,32 @@ def page_stations() -> None:
     )
     years = dq.YEARS if not year else (year, year)
     rows, sql = cached("station_rows", years)
-    codes = sorted(rows["location_code"].unique())
-    chosen = c2.multiselect(
-        "Điểm có trạm", codes, default=codes, format_func=names().get, key="st_locations"
-    )
-    rows = rows[rows["location_code"].isin(chosen)]
     if rows.empty:
-        st.info("Chọn ít nhất một điểm.")
+        st.info("Không có số liệu trạm cho lựa chọn này.")
         sql_box(sql)
         return
+    # One location for the cards and the line (rain is never added across locations); the
+    # column chart and the table show every location with a station side by side.
+    codes = sorted(rows["location_code"].unique())
+    location = c2.selectbox(
+        "Điểm có trạm (thẻ số và biểu đồ đường)",
+        codes,
+        index=codes.index("HAN") if "HAN" in codes else 0,
+        format_func=names().get,
+        key="st_location",
+    )
     summary = dq.station_summary(rows)
+    own = summary[summary["location_code"] == location].iloc[0]
+    one = rows[rows["location_code"] == location]
+    st.markdown(
+        f"Thẻ số và biểu đồ đường: **{names()[location]}** (trạm {own['station_id']} "
+        f"{own['station_name']}). Biểu đồ cột và bảng: cả {len(codes)} điểm có trạm, "
+        "mỗi điểm một cột riêng."
+    )
     cards = st.columns(3)
-    cards[0].metric("Ngày mưa theo trạm", num(summary["station_rainy_days"].sum(), 0))
-    cards[1].metric("Ngày mưa theo Open-Meteo", num(summary["model_rainy_days"].sum(), 0))
-    cards[2].metric("Số ngày so sánh", num(summary["compared_days"].sum(), 0))
+    cards[0].metric("Ngày mưa theo trạm", num(own["station_rainy_days"], 0))
+    cards[1].metric("Ngày mưa theo Open-Meteo", num(own["model_rainy_days"], 0))
+    cards[2].metric("Số ngày so sánh", num(own["compared_days"], 0))
 
     left, right = st.columns(2)
     fig = go.Figure(
@@ -947,11 +1039,14 @@ def page_stations() -> None:
             ),
         ]
     )
-    left.plotly_chart(style(fig, "Tổng lượng mưa theo điểm (mm)", "mm"), use_container_width=True)
+    period = "2016–2025" if not year else str(year)
+    left.plotly_chart(
+        style(fig, f"Tổng lượng mưa theo điểm (mm, {period})", "mm"), use_container_width=True
+    )
     key = "month" if year else "year"
     series = (
-        rows.groupby(key)
-        .agg(station=("station_rain_mm", "sum"), model=("model_rain_mm", "sum"))
+        one.groupby(key)
+        .agg(station=("station_rain_mm", _total), model=("model_rain_mm", _total))
         .reset_index()
     )
     fig = go.Figure(
@@ -977,7 +1072,9 @@ def page_stations() -> None:
     else:
         fig.update_xaxes(dtick=1)
     right.plotly_chart(
-        style(fig, f"Lượng mưa theo {'tháng' if year else 'năm'} (mm)", "mm"),
+        style(
+            fig, f"Lượng mưa theo {'tháng' if year else 'năm'} tại {names()[location]} (mm)", "mm"
+        ),
         use_container_width=True,
     )
 
@@ -997,10 +1094,9 @@ def page_stations() -> None:
         )
     )
     st.caption(
-        "Ngày mưa của trạm là 24 giờ kết thúc lúc 12:00 UTC (19:00 giờ Việt Nam), khác "
-        "ngày lịch. Hà Nội dùng trạm Hà Đông (11,3 km), Ninh Bình dùng trạm Nam Định "
-        "(27,3 km); Phú Thọ, Tuyên Quang, Hòa Bình không có trạm. Mưa Open-Meteo chỉ tính "
-        "ngày đủ 24 giờ."
+        "Hà Nội dùng trạm Hà Đông (11,3 km), Ninh Bình dùng trạm Nam Định (27,3 km); Phú Thọ, "
+        "Tuyên Quang, Hòa Bình không có trạm. Ngày 01/01/2016 chỉ có 13 giờ Open-Meteo trong "
+        "khung 24 giờ nên mưa mô hình để trống (cả 5 trạm ghi 0,0 mm)."
     )
     sql_box(sql)
 
@@ -1009,7 +1105,12 @@ def page_stations() -> None:
 
 
 def page_forecast() -> None:
-    header("Dự báo và thực tế", "Mô hình CART v1 dự báo mưa 24 giờ tới đúng đến đâu?", "Slice")
+    header(
+        "Dự báo và thực tế",
+        "Mô hình CART v1 dự báo mưa 24 giờ tới đúng đến đâu?",
+        "Slice",
+        basis=FORECAST_BASIS,
+    )
     st.info(
         "CART v1, ngưỡng xác suất 0,40 chọn trên validation 2024. Nhãn: tổng mưa 24 giờ tới "
         "≥ 1 mm (Open-Meteo). Test 2025 được đánh giá đúng một lần; đây là thí nghiệm hồi "
@@ -1051,6 +1152,10 @@ def page_forecast() -> None:
     cards[2].metric("Precision", num(m["precision"], 3))
     cards[3].metric("Recall", num(m["recall"], 3))
     cards[4].metric("F1", num(m["f1"], 3))
+    rates = st.columns(5)
+    rates[0].metric("Tỉ lệ có mưa thực tế", num(m["actual_rate"], 3))
+    rates[1].metric("Tỉ lệ dự báo mưa", num(m["predicted_rate"], 3))
+    rates[2].metric("Xác suất mưa trung bình", num(data["rain_probability"].mean(), 3))
 
     left, mid = st.columns([1, 1])
     n = max(m["n"], 1)
@@ -1097,38 +1202,43 @@ def page_forecast() -> None:
     fig.update_xaxes(range=[0, 1])
     with mid:
         show(style(fig, "F1 theo điểm", height=380))
+    # As specified: the two rates on one percentage axis; F1 and the mean probability, which
+    # are not percentages, only in the tooltip
     by_month = dq.metrics_by(data, "month", threshold)
+    by_month["prob_mean"] = by_month["month"].map(data.groupby("month")["rain_probability"].mean())
+    extra = by_month[["f1", "prob_mean"]].to_numpy()
+    tip = "<br>F1 %{customdata[0]:,.3f} · xác suất TB %{customdata[1]:,.3f}"
     fig = go.Figure(
         [
             go.Scatter(
                 name="Tỉ lệ có mưa thực tế",
                 x=by_month["month"],
                 y=by_month["actual_rate"],
+                customdata=extra,
                 mode="lines+markers",
                 line=dict(color=ACTUAL, width=2),
-                hovertemplate="T%{x}: %{y:.1%}<extra>Thực tế</extra>",
+                hovertemplate="T%{x}: %{y:.1%}" + tip + "<extra>Thực tế</extra>",
             ),
             go.Scatter(
                 name="Tỉ lệ dự báo mưa",
                 x=by_month["month"],
                 y=by_month["predicted_rate"],
+                customdata=extra,
                 mode="lines+markers",
                 line=dict(color=PREDICTED, width=2, dash="dot"),
-                hovertemplate="T%{x}: %{y:.1%}<extra>Dự báo</extra>",
-            ),
-            go.Scatter(
-                name="F1",
-                x=by_month["month"],
-                y=by_month["f1"],
-                mode="lines+markers",
-                line=dict(color="#5A6B7B", width=1.5),
-                hovertemplate="T%{x}: F1 %{y:,.3f}<extra></extra>",
+                hovertemplate="T%{x}: %{y:.1%}" + tip + "<extra>Dự báo</extra>",
             ),
         ]
     )
     month_axis(fig)
     fig.update_yaxes(range=[0, 1], tickformat=".0%")
-    show(style(fig, "Theo tháng: tỉ lệ mưa thực tế, dự báo và F1", height=360))
+    show(
+        style(
+            fig,
+            "Theo tháng: tỉ lệ có mưa thực tế và tỉ lệ dự báo mưa (F1 khi rê chuột)",
+            height=360,
+        )
+    )
 
     by_season = dq.metrics_by(data, "season", threshold)
     table(
@@ -1163,9 +1273,20 @@ def page_forecast() -> None:
             "giờ Việt Nam)."
         )
     else:
-        predicted = (
-            one["predicted_rain"] if threshold == 0.40 else one["rain_probability"] >= threshold
-        )
+        official = threshold == 0.40
+        predicted = one["predicted_rain"] if official else one["rain_probability"] >= threshold
+        if official:
+            outcome = one["outcome"].fillna("—")
+        else:
+            outcome = pd.Series(
+                [
+                    "—"
+                    if a is None or pd.isna(a)
+                    else ("TP" if p and a else "FP" if p else "FN" if a else "TN")
+                    for p, a in zip(predicted, one["actual_rain"])
+                ],
+                index=one.index,
+            )
         table(
             pd.DataFrame(
                 {
@@ -1173,7 +1294,7 @@ def page_forecast() -> None:
                     "Xác suất mưa": one["rain_probability"].map(lambda v: num(v, 4)),
                     "Dự báo": predicted.map({True: "Có mưa", False: "Không mưa"}),
                     "Mưa thực tế 24 giờ tới (mm)": one["actual_rain_mm"].map(num),
-                    "Kết quả": one["outcome"] if threshold == 0.40 else "—",
+                    "Kết quả" if official else f"Kết quả (ngưỡng {num(threshold, 2)})": outcome,
                 }
             )
         )
@@ -1275,7 +1396,10 @@ def page_olap() -> None:
                 "Quý": rollup["quarter"].map(lambda v: num(v, 0)),
                 "Tháng": rollup["month"].map(lambda v: num(v, 0)),
                 "Mưa (mm)": rollup["rain_mm"].map(num),
-                "Ngày mưa": rollup["rainy_days"].map(lambda v: num(v, 0)),
+                # count(*) FILTER gives 0 for a period without a complete day: unknown, not 0
+                "Ngày mưa": rollup["rainy_days"]
+                .where(rollup["complete_days"] > 0)
+                .map(lambda v: num(v, 0)),
                 "Nhiệt độ TB (°C)": rollup["temp_mean_c"].map(lambda v: num(v, 2)),
             }
         )

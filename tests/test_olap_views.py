@@ -270,6 +270,7 @@ def test_dashboard_queries_on_the_warehouse(olap_cursor, pg_connection):
 
     years, _ = dq.trend_years(pg_connection, "Open-Meteo", "HAN")
     assert years.set_index("year").loc[2023, "rain_mm"] == pytest.approx(5.8)
+    assert {"temp_min_c", "temp_max_c"} <= set(years.columns)
     months, _ = dq.trend_months(pg_connection, "Open-Meteo", "HAN", 2023)
     days, _ = dq.trend_days(pg_connection, "Open-Meteo", "HAN", 2023, 3)
     hours_df, _ = dq.trend_hours(pg_connection, "Open-Meteo", "HAN", date(2023, 3, 1))
